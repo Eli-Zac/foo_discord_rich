@@ -43,13 +43,23 @@
     <OutDir>$(ProjectDir)..\_result\$(Platform)\</OutDir>
     <NMakeOutput>$(ProjectDir)..\_result\$(Platform)\lib\discord-rpc.lib</NMakeOutput>
   </PropertyGroup>
-  <PropertyGroup>
+  <PropertyGroup Condition="'$(Platform)'=='Win32'">
     <NMakeBuildCommandLine>cd "$(ProjectDir)"..\
 mkdir build
 cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=..\_result\$(Platform) -DCMAKE_GENERATOR_INSTANCE="$(CurrentVsInstallRoot)" -DCMAKE_GENERATOR_PLATFORM=$(Platform) -DUSE_STATIC_CRT=ON
+cmake .. -DCMAKE_BUILD_TYPE=$(Configuration) -DCMAKE_INSTALL_PREFIX=..\_result\$(Platform) -DUSE_STATIC_CRT=ON -DCMAKE_C_FLAGS="/Gd" -DCMAKE_CXX_FLAGS="/Gd"
 cmake --build ..\build --config $(Configuration) --target install</NMakeBuildCommandLine>
-    <ExecutablePath>$(DevEnvDir)CommonExtensions\Microsoft\CMake\CMake\bin;$(ExecutablePath)</ExecutablePath>
+    <ExecutablePath>$(ExecutablePath)</ExecutablePath>
+    <NMakeCleanCommandLine>rmdir /s/q "$(ProjectDir)"..\build
+rmdir /s/q "$(ProjectDir)"..\_result</NMakeCleanCommandLine>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Platform)'=='x64'">
+    <NMakeBuildCommandLine>cd "$(ProjectDir)"..\
+mkdir build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=$(Configuration) -DCMAKE_INSTALL_PREFIX=..\_result\$(Platform) -DUSE_STATIC_CRT=ON
+cmake --build ..\build --config $(Configuration) --target install</NMakeBuildCommandLine>
+    <ExecutablePath>$(ExecutablePath)</ExecutablePath>
     <NMakeCleanCommandLine>rmdir /s/q "$(ProjectDir)"..\build
 rmdir /s/q "$(ProjectDir)"..\_result</NMakeCleanCommandLine>
   </PropertyGroup>
