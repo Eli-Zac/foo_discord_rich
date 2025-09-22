@@ -411,13 +411,140 @@ std::wstring to_wstring(const std::string &str)
     return str_w;
 }
 
-bool uploadOpenProcess(const std::wstring &cmd_w, const char* filepath_c, pfc::string8 &artwork_url,
-    STARTUPINFO &siStartInfo, PROCESS_INFORMATION &piProcInfo,
-    HANDLE &g_hChildStd_OUT_Wr, HANDLE &g_hChildStd_IN_Rd, HANDLE &g_hChildStd_IN_Wr, HANDLE &g_hChildStd_OUT_Rd)
+/*
+    The previous implementation would use stdin, we're keeping it for backwards compatibility with older scripts.
+    When placeholder string {filepath} is found, it'll substitute it and pass it as a positional argument, skipping stdin.
+    TODO: Add current URL with {cachedurl}, this would allow a script to verify it's still up and skip it OR pass it back (do we want that?)
+*/
+std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandString, const std::string &filepath = "")
 {
-     // Create the child process.
-     bool bSuccess = CreateProcessW(NULL,
-        (LPWSTR)cmd_w.c_str(), // command line
+    std::string processedCommand = commandString;
+
+    // Replace all {filepath} placeholders if present
+    const std::string placeholder = "{filepath}";
+    size_t placeholderPos = 0;
+
+    // Quote filepath if it contains spaces
+    std::string quotedFilepath = filepath;
+    if (!filepath.empty() && filepath.find(' ') != std::string::npos && filepath[0] != '"') {
+        quotedFilepath = "\"" + filepath + "\"";
+    }
+
+    // Replace all occurrences of {filepath}
+    while ((placeholderPos = processedCommand.find(placeholder, placeholderPos)) != std::string::npos) {
+        processedCommand.replace(placeholderPos, placeholder.length(), quotedFilepath);
+        placeholderPos += quotedFilepath.length(); // Move past the replacement
+    }
+
+    std::wstring cmd_w = to_wstring(processedCommand);
+    std::wstring executable;
+    std::wstring fullCmdLine = cmd_w;
+
+    // Find the executable part (first token, handling quotes)
+    size_t pos = 0;
+    if (cmd_w[0] == L'"') {
+        // Quoted executable path
+        pos = cmd_w.find(L'"', 1);
+        if (pos != std::wstring::npos) {
+            executable = cmd_w.substr(1, pos - 1); // remove quotes
+            pos++; // move past the closing quote
+        }
+    } else {
+        // Unquoted executable path - find first space
+        pos = cmd_w.find(L' ');
+        if (pos != std::wstring::npos) {
+            executable = cmd_w.substr(0, pos);
+        } else {
+            executable = cmd_w; // no arguments
+        }
+    }
+
+    return std::make_pair(executable, fullCmdLine);
+}
+
+/*
+    Check if command uses file path placeholder
+*/
+bool usesFilePathPlaceholder(const std::string &commandString)
+{
+    return commandString.find("{filepath}") != std::string::npos;
+}
+
+/*
+    Validate command string
+*/
+bool validateCommandString(const std::string &commandString, std::string &errorMessage)
+{
+    // Check for empty/whitespace-only command
+    if (commandString.empty() || commandString.find_first_not_of(" \t\n\r") == std::string::npos) {
+        errorMessage = "Invalid command string: is empty or only contains whitespaces.";
+        return false;
+    }
+
+    // Basic quote matching check
+    size_t quoteCount = 0;
+    for (char c : commandString) {
+        if (c == '"') quoteCount++;
+    }
+    if (quoteCount % 2 != 0) {
+        errorMessage = "Invalid command string: quotes do not match.";
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Warning: " << errorMessage;
+        // Keep going, receiver might handle it fine..?
+        // Consider adding a popup warning for certain ones?
+    }
+
+    return true;
+}
+
+/*
+    Get Windows error description from error code
+*/
+std::string getWindowsErrorDescription(DWORD errorCode)
+{
+    LPSTR messageBuffer = nullptr;
+    DWORD size = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPSTR)&messageBuffer, 0, NULL);
+
+    if (size && messageBuffer) {
+        std::string message(messageBuffer, size);
+        LocalFree(messageBuffer);
+
+        // Remove trailing return or newline
+        while (!message.empty() && (message.back() == '\r' || message.back() == '\n')) {
+            message.pop_back();
+        }
+        return message;
+    }
+
+    return "Unknown error";
+}
+
+/*
+    Simple validation, does it look like a normal URL? Insert <falsehoods people believe about URLs> here
+*/
+bool isValidUrl(const pfc::string8 &url)
+{
+    if (url.get_length() == 0) {
+        return false;
+    }
+
+    // Check for basic URL patterns
+    const char* url_cstr = url.c_str();
+    return (strncmp(url_cstr, "http://", 7) == 0 ||
+            strncmp(url_cstr, "https://", 8) == 0);
+}
+
+bool uploadOpenProcess(const std::wstring &executable, const std::wstring &cmd_w, const char* filepath_c, pfc::string8 &artwork_url,
+    STARTUPINFO &siStartInfo, PROCESS_INFORMATION &piProcInfo,
+    HANDLE &g_hChildStd_OUT_Wr, HANDLE &g_hChildStd_IN_Rd, HANDLE &g_hChildStd_IN_Wr, HANDLE &g_hChildStd_OUT_Rd, bool useStdinForFilepath)
+{
+     // Create the child process
+     std::wstring mutableCmdLine = cmd_w; // https://devblogs.microsoft.com/oldnewthing/20090601-00/?p=18083
+     bool bSuccess = CreateProcessW(
+        executable.empty() ? NULL : executable.c_str(), // application name
+        (LPWSTR)mutableCmdLine.c_str(), // command line
         NULL,          // process security attributes
         NULL,          // primary thread security attributes
         TRUE,          // handles are inherited
@@ -438,8 +565,14 @@ bool uploadOpenProcess(const std::wstring &cmd_w, const char* filepath_c, pfc::s
 
          try
          {
-             DWORD dwWritten;
-             bool wSuccess = WriteFile(g_hChildStd_IN_Wr, filepath_c, (DWORD)strlen( filepath_c ), &dwWritten, NULL );
+             bool wSuccess = true;
+
+             // stdin if we're using no placeholder, old behaviour for backwards compatibility so it doesn't break somebody's script
+             if (useStdinForFilepath) {
+                 DWORD dwWritten;
+                 wSuccess = WriteFile(g_hChildStd_IN_Wr, filepath_c, (DWORD)strlen( filepath_c ), &dwWritten, NULL );
+             }
+
              CloseHandle( g_hChildStd_IN_Wr );
              g_hChildStd_IN_Wr = NULL;
 
@@ -473,7 +606,8 @@ bool uploadOpenProcess(const std::wstring &cmd_w, const char* filepath_c, pfc::s
          CloseHandle( piProcInfo.hThread );
 
          // If exit code is zero and result contains newlines assume it's an error since urls should not contains those
-         const bool isError = exit_code != 0 || artwork_url.find_first('\n') != ~0;
+         // Also does simple validation on the URL
+         const bool isError = exit_code != 0 || artwork_url.find_first('\n') != ~0 || !isValidUrl(artwork_url);
          artwork_url =  terminateProcess ? pfc::string8("Process timed out") : artwork_url;
 
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": artwork uploader exited with status: " << exit_code <<
@@ -487,7 +621,25 @@ bool uploadOpenProcess(const std::wstring &cmd_w, const char* filepath_c, pfc::s
          return true;
      }
 
-    FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Failed to run command '" << cmd_w << "'";
+    // What's the actual error? We care.
+    DWORD lastError = GetLastError();
+    std::string errorDesc = getWindowsErrorDescription(lastError);
+
+    // Let's get the executable string
+    std::string executableStr;
+    if (!executable.empty()) {
+        int size = WideCharToMultiByte(CP_UTF8, 0, executable.c_str(), -1, NULL, 0, NULL, NULL);
+        if (size > 0) {
+            executableStr.resize(size - 1); // -1 to exclude null terminator
+            WideCharToMultiByte(CP_UTF8, 0, executable.c_str(), -1, &executableStr[0], size, NULL, NULL);
+        }
+    }
+
+    if (!executableStr.empty()) {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Failed to execute '" << executableStr << "' (Windows error: " << lastError << " - " << errorDesc << ")";
+    } else {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Failed to execute command (Windows error: " << lastError << " - " << errorDesc << ")";
+    }
 
     return false;
 }
@@ -508,11 +660,24 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort)
         return artwork_url;
     }
 
+    // Validate command string
+    std::string validationError;
+    if (!validateCommandString(commandString, validationError)) {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Invalid upload command: " << validationError;
+        return artwork_url;
+    }
+
     pfc::string8 tempFile;
     bool deleteFile;
     auto filepath = getArtworkFilepath(art, abort, tempFile, deleteFile);
 
     const auto filepath_c = filepath.c_str();
+
+    // Must validate the file path we're substituting the token with exists
+    if (usesFilePathPlaceholder(commandString) && !filesystem::g_exists(filepath_c, abort)) {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Warning: artwork file path does not exist: " << filepath;
+        // Keep going, could not be there yet? I think it may trigger and still work *clueless*
+    }
 
     abort.check();
    
@@ -548,13 +713,23 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort)
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Upload command " << commandString;
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cover file path " << filepath;
          #endif
-         const auto cmd_w = to_wstring( commandString );
+
+         // {filepath} placeholder check
+         const bool usesPlaceholder = usesFilePathPlaceholder(commandString);
+
+         // Parse the command to separate executable from full command line
+         // If we're using a placeholder, substitute it. We may add more later.
+         const auto parsedCmd = parseCommand(commandString, usesPlaceholder ? filepath.c_str() : "");
+         const auto& executable = parsedCmd.first;
+         const auto& fullCmdLine = parsedCmd.second;
 
          abort.check();
 
-         uploadOpenProcess(cmd_w, filepath_c, artwork_url,
+         // If using placeholder, skip writing to stdin, the user should not need that
+         // If not using placeholder, use stdin for backwards compatibility
+         uploadOpenProcess(executable, fullCmdLine, filepath_c, artwork_url,
              siStartInfo, piProcInfo,
-             g_hChildStd_OUT_Wr, g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd);
+             g_hChildStd_OUT_Wr, g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, !usesPlaceholder);
      } catch (...)
      {
          closePipes(g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, g_hChildStd_OUT_Wr);
