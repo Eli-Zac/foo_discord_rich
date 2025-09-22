@@ -28,20 +28,39 @@ def pack(is_debug = False):
     root_dir = cur_dir.parent
 
     result_machine_dir = root_dir/"_result"/("Win32_Debug" if is_debug else "Win32_Release")
-    pack_win32 = result_machine_dir.exists() and result_machine_dir.is_dir()
-
     result_machine_dir_x64 = root_dir/"_result"/("x64_Debug" if is_debug else "x64_Release")
-    pack_x64 = result_machine_dir_x64.exists() and result_machine_dir_x64.is_dir()
+
+    # read current version from VERSION file
+    version_file = root_dir / "VERSION"
+    if version_file.exists():
+        current_version = version_file.read_text().strip()
+    else:
+        current_version = "unknown"
+
+    # check if builds exist and match current version
+    def check_build_version(build_dir):
+        if not (build_dir.exists() and build_dir.is_dir()):
+            return False
+        version_meta = build_dir / "bin" / ".version"
+        if not version_meta.exists():
+            print(f"Warning: No version metadata found in {build_dir}/bin/. Build may be outdated.")
+            return False
+        built_version = version_meta.read_text().strip()
+        if built_version != current_version:
+            print(f"ERROR: Build version mismatch in {build_dir}")
+            print(f"\tCurrent VERSION: {current_version}, while built version: {built_version}")
+            print("Rebuild before attempting packaging..")
+            return False
+        return True
+
+    pack_win32 = check_build_version(result_machine_dir)
+    pack_x64 = check_build_version(result_machine_dir_x64)
 
     # At least one must be defined
     assert(pack_win32 or pack_x64)
 
-    # read version from VERSION file (but may not be what's actually built)
-    version_file = root_dir / "VERSION"
-    if version_file.exists():
-        version = version_file.read_text().strip()
-    else:
-        version = "unknown"
+    # use the validated current version
+    version = current_version
 
     # multiarch when both are built, or individual if not
     if pack_win32 and pack_x64:
@@ -49,7 +68,7 @@ def pack(is_debug = False):
         component_name = f"foo_discord_rich_{version}.fb2k-component"
     else:
         output_dir = result_machine_dir if pack_win32 else result_machine_dir_x64
-        arch_suffix = "x32" if pack_win32 else "x64"
+        arch_suffix = "win32" if pack_win32 else "x64"
         component_name = f"foo_discord_rich_{arch_suffix}_{version}.fb2k-component"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -84,7 +103,7 @@ def pack(is_debug = False):
         if pack_win32 and pack_x64:
             pdb_name = f"foo_discord_rich_{version}_pdb.zip"
         else:
-            arch_suffix = "x32" if pack_win32 else "x64"
+            arch_suffix = "win32" if pack_win32 else "x64"
             pdb_name = f"foo_discord_rich_{arch_suffix}_{version}_pdb.zip"
         pdb_zip = output_dir / pdb_name
         if pdb_zip.exists():
