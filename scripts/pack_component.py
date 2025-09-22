@@ -36,10 +36,24 @@ def pack(is_debug = False):
     # At least one must be defined
     assert(pack_win32 or pack_x64)
 
-    output_dir = result_machine_dir if pack_win32 else result_machine_dir_x64
+    # read version from VERSION file (but may not be what's actually built)
+    version_file = root_dir / "VERSION"
+    if version_file.exists():
+        version = version_file.read_text().strip()
+    else:
+        version = "unknown"
+
+    # multiarch when both are built, or individual if not
+    if pack_win32 and pack_x64:
+        output_dir = root_dir / "_result" / ("multiarch_debug" if is_debug else "multiarch_release")
+        component_name = f"foo_discord_rich_{version}.fb2k-component"
+    else:
+        output_dir = result_machine_dir if pack_win32 else result_machine_dir_x64
+        arch_suffix = "x32" if pack_win32 else "x64"
+        component_name = f"foo_discord_rich_{arch_suffix}_{version}.fb2k-component"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    component_zip = output_dir/"foo_discord_rich.fb2k-component"
+    component_zip = output_dir / component_name
     component_zip.unlink(missing_ok=True)
 
     with ZipFile(component_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
@@ -67,7 +81,12 @@ def pack(is_debug = False):
 
     if not is_debug:
         # Release pdbs are packed in a separate package
-        pdb_zip = output_dir/"foo_discord_rich_pdb.zip"
+        if pack_win32 and pack_x64:
+            pdb_name = f"foo_discord_rich_{version}_pdb.zip"
+        else:
+            arch_suffix = "x32" if pack_win32 else "x64"
+            pdb_name = f"foo_discord_rich_{arch_suffix}_{version}_pdb.zip"
+        pdb_zip = output_dir / pdb_name
         if pdb_zip.exists():
             pdb_zip.unlink()
 
