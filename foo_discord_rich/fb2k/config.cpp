@@ -10,7 +10,7 @@ namespace drp::config
 qwr::fb2k::ConfigBool isEnabled( guid::conf_is_enabled, true );
 qwr::fb2k::ConfigUint8Enum<ImageSetting> largeImageSettings( guid::conf_large_image_settings, ImageSetting::Light );
 qwr::fb2k::ConfigUint8Enum<ImageSetting> smallImageSettings( guid::conf_small_image_settings, ImageSetting::Light );
-qwr::fb2k::ConfigUint8Enum<TimeSetting> timeSettings( guid::conf_time_settings, TimeSetting::Elapsed );
+qwr::fb2k::ConfigUint8Enum<TimeSetting> timeSettings( guid::conf_time_settings, TimeSetting::ProgressBar );
 qwr::fb2k::ConfigUint8Enum<StatusSetting> statusSettings( guid::conf_status_settings, StatusSetting::Name );
 
 qwr::fb2k::ConfigString stateQuery( guid::conf_state_query, "[%title%]" );

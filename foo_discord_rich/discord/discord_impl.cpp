@@ -339,10 +339,17 @@ void PresenceModifier::UpdateDuration( double time )
                                                   : config::TimeSetting::Disabled );
     switch ( timeSetting )
     {
-    case config::TimeSetting::Elapsed:
+    case config::TimeSetting::ProgressBar:
     {
         pd->presence.startTimestamp = std::time( nullptr ) - std::llround( time );
         pd->presence.endTimestamp = std::time( nullptr ) + std::max<uint64_t>( 0, std::llround( pd->trackLength - time ) );
+
+        break;
+    }
+    case config::TimeSetting::Elapsed:
+    {
+        pd->presence.startTimestamp = std::time( nullptr ) - std::llround( time );
+        pd->presence.endTimestamp = 0;
 
         break;
     }
@@ -379,8 +386,8 @@ void DiscordHandler::Initialize()
     appToken_ = config::discordAppToken;
 
     // fix from RemuSalminen@d627c6e - ensure timeSettings has valid value
-    if ( config::timeSettings != config::TimeSetting::Elapsed && config::timeSettings != config::TimeSetting::Disabled )
-        config::timeSettings = config::TimeSetting::Elapsed;
+    if ( config::timeSettings != config::TimeSetting::ProgressBar && config::timeSettings != config::TimeSetting::Elapsed && config::timeSettings != config::TimeSetting::Disabled )
+        config::timeSettings = config::TimeSetting::ProgressBar;
 
     DiscordEventHandlers handlers{};
 

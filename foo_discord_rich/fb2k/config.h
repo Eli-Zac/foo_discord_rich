@@ -13,8 +13,9 @@ enum class ImageSetting : uint8_t
 };
 enum class TimeSetting : uint8_t
 {
-    Elapsed = 0,
-    Disabled
+    ProgressBar = 0,  // Shows progress bar (start + end timestamps)
+    Elapsed = 1,      // Shows elapsed (start timestamp, old display mode)
+    Disabled = 2      // Discord decides, i.e. elapsed since last status update, won't follow playback unless never interacted with
 };
 enum class StatusSetting : uint8_t
 {

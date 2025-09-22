@@ -12,10 +12,10 @@
 #define IDC_RADIO_IMG_LIGHT             1071
 #define IDC_RADIO_IMG_DARK              1072
 #define IDC_RADIO_IMG_DISABLED          1073
-#define IDC_RADIO_TIME_ELAPSED          1074
-#define IDC_RADIO_TIME_REMAINING        1075
-#define IDC_CHECK_IS_ENABLED            1076
-#define IDC_RADIO_TIME_DISABLED         1077
+#define IDC_RADIO_TIME_PROGRESS_BAR     1074
+#define IDC_RADIO_TIME_ELAPSED          1075
+#define IDC_RADIO_TIME_DISABLED         1076
+#define IDC_CHECK_IS_ENABLED            1077
 #define IDC_TAB1                        1078
 #define IDC_TEXTBOX_LARGE_LIGHT_ID      1079
 #define IDC_TEXTBOX_LARGE_DARK_ID       1080
