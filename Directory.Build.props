@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <EnableSourceLink Condition="'$(EnableSourceLink)' == ''">false</EnableSourceLink>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(EnableSourceLink)' == 'true'">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.0.0" PrivateAssets="All"/>
+    <PackageReference Include="Microsoft.Build.Tasks.Git" Version="1.0.0" PrivateAssets="All"/>
+    <PackageReference Include="Microsoft.SourceLink.Common" Version="1.0.0" PrivateAssets="All"/>
+  </ItemGroup>
+</Project>
