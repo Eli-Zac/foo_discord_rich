@@ -35,6 +35,9 @@
 #define IDC_TEXTBOX_METADB_KEY          1096
 #define IDC_TEXTBOX_URL                 1097
 #define IDC_TEXTBOX_PROCESS_TIMEOUT     1098
+#define IDC_RADIO_STATUS_NAME           1099
+#define IDC_RADIO_STATUS_TOP            1100
+#define IDC_RADIO_STATUS_MIDDLE         1101
 #ifndef IDC_STATIC
 #define IDC_STATIC -1
 #endif
@@ -45,7 +48,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        125
 #define _APS_NEXT_COMMAND_VALUE         40012
-#define _APS_NEXT_CONTROL_VALUE         1099
+#define _APS_NEXT_CONTROL_VALUE         1102
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

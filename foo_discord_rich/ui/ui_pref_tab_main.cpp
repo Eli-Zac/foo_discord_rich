@@ -26,8 +26,11 @@ PreferenceTabMain::PreferenceTabMain( PreferenceTabManager* pParent )
                              { ImageSetting::Disabled, IDC_RADIO_PLAYBACK_IMG_DISABLED } } )
     , timeSettings_( config::timeSettings,
                      { { TimeSetting::Elapsed, IDC_RADIO_TIME_ELAPSED },
-                       { TimeSetting::Remaining, IDC_RADIO_TIME_REMAINING },
                        { TimeSetting::Disabled, IDC_RADIO_TIME_DISABLED } } )
+    , statusSettings_( config::statusSettings,
+                      { { StatusSetting::Name, IDC_RADIO_STATUS_NAME },
+                        { StatusSetting::Top, IDC_RADIO_STATUS_TOP },
+                        { StatusSetting::Middle, IDC_RADIO_STATUS_MIDDLE } } )
     , disableWhenPaused_( config::disableWhenPaused )
     , swapSmallImages_( config::swapSmallImages )
     , ddxOptions_( {
@@ -36,7 +39,8 @@ PreferenceTabMain::PreferenceTabMain( PreferenceTabManager* pParent )
           qwr::ui::CreateUiDdxOption<qwr::ui::UiDdx_TextEdit>( detailsQuery_, IDC_TEXTBOX_DETAILS ),
           qwr::ui::CreateUiDdxOption<qwr::ui::UiDdx_RadioRange>( largeImageSettings_, std::initializer_list<int>{ IDC_RADIO_IMG_LIGHT, IDC_RADIO_IMG_DARK, IDC_RADIO_IMG_DISABLED } ),
           qwr::ui::CreateUiDdxOption<qwr::ui::UiDdx_RadioRange>( smallImageSettings_, std::initializer_list<int>{ IDC_RADIO_PLAYBACK_IMG_LIGHT, IDC_RADIO_PLAYBACK_IMG_DARK, IDC_RADIO_PLAYBACK_IMG_DISABLED } ),
-          qwr::ui::CreateUiDdxOption<qwr::ui::UiDdx_RadioRange>( timeSettings_, std::initializer_list<int>{ IDC_RADIO_TIME_ELAPSED, IDC_RADIO_TIME_REMAINING, IDC_RADIO_TIME_DISABLED } ),
+          qwr::ui::CreateUiDdxOption<qwr::ui::UiDdx_RadioRange>( timeSettings_, std::initializer_list<int>{ IDC_RADIO_TIME_ELAPSED, IDC_RADIO_TIME_DISABLED } ),
+          qwr::ui::CreateUiDdxOption<qwr::ui::UiDdx_RadioRange>( statusSettings_, std::initializer_list<int>{ IDC_RADIO_STATUS_NAME, IDC_RADIO_STATUS_TOP, IDC_RADIO_STATUS_MIDDLE } ),
           qwr::ui::CreateUiDdxOption<qwr::ui::UiDdx_CheckBox>( disableWhenPaused_, IDC_CHECK_DISABLE_WHEN_PAUSED ),
           qwr::ui::CreateUiDdxOption<qwr::ui::UiDdx_CheckBox>( swapSmallImages_, IDC_CHECK_SWAP_STATUS ),
       } )

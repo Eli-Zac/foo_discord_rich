@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 import call_wrapper
+from apply_patch import patch
 
 def configure():
     cur_dir = Path(__file__).parent.absolute()
@@ -12,6 +13,11 @@ def configure():
     assert(discord_dir.exists() and discord_dir.is_dir())
 
     shutil.copy2(cur_dir/"additional_files"/"discord-rpc.vcxproj", str(discord_dir/"src") + '/')
+
+    # Apply discord-rpc patch for status types
+    discord_patch = cur_dir/"additional_files"/"discord-rpc.patch"
+    if discord_patch.exists():
+        patch([discord_patch])
 
 if __name__ == '__main__':
     call_wrapper.final_call_decorator(

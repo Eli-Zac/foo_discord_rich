@@ -15,6 +15,8 @@ namespace drp::internal
 PresenceData::PresenceData()
 {
     memset( &presence, 0, sizeof( presence ) );
+    presence.activityType = LISTENING;  // Default to listening for music
+    presence.statusDisplayType = NAME;   // Default to showing app name
     presence.state = reinterpret_cast<const char*>( state.c_str() );
     presence.details = reinterpret_cast<const char*>( details.c_str() );
 }
@@ -298,6 +300,26 @@ void PresenceModifier::UpdateTrack( metadb_handle_ptr metadb )
     pd->details = queryData( config::detailsQuery );
     fixStringLength( pd->details );
 
+    // update status display type
+    switch ( config::statusSettings )
+    {
+    case config::StatusSetting::Name:
+    {
+        pd->presence.statusDisplayType = NAME;
+        break;
+    }
+    case config::StatusSetting::Middle:
+    {
+        pd->presence.statusDisplayType = STATE;
+        break;
+    }
+    case config::StatusSetting::Top:
+    {
+        pd->presence.statusDisplayType = DETAILS;
+        break;
+    }
+    }
+
     const qwr::u8string lengthStr = queryData( "[%length_seconds_fp%]" );
     pd->trackLength = ( lengthStr.empty() ? 0 : stold( lengthStr ) );
 
@@ -320,13 +342,6 @@ void PresenceModifier::UpdateDuration( double time )
     case config::TimeSetting::Elapsed:
     {
         pd->presence.startTimestamp = std::time( nullptr ) - std::llround( time );
-        pd->presence.endTimestamp = 0;
-
-        break;
-    }
-    case config::TimeSetting::Remaining:
-    {
-        pd->presence.startTimestamp = 0;
         pd->presence.endTimestamp = std::time( nullptr ) + std::max<uint64_t>( 0, std::llround( pd->trackLength - time ) );
 
         break;
@@ -362,6 +377,10 @@ DiscordHandler& DiscordHandler::GetInstance()
 void DiscordHandler::Initialize()
 {
     appToken_ = config::discordAppToken;
+
+    // fix from RemuSalminen@d627c6e - ensure timeSettings has valid value
+    if ( config::timeSettings != config::TimeSetting::Elapsed && config::timeSettings != config::TimeSetting::Disabled )
+        config::timeSettings = config::TimeSetting::Elapsed;
 
     DiscordEventHandlers handlers{};
 
