@@ -1,0 +1,10 @@
+diff --git a/submodules/discord-rpc/CMakeLists.txt b/submodules/discord-rpc/CMakeLists.txt
+index 5dad9e9..f29146e 100644
+--- a/submodules/discord-rpc/CMakeLists.txt
++++ b/submodules/discord-rpc/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-cmake_minimum_required (VERSION 3.2.0)
++cmake_minimum_required (VERSION 3.5.0)
+ project (DiscordRPC)
+ 
+ include(GNUInstallDirs)
