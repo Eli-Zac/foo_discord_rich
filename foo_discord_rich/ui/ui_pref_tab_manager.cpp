@@ -65,6 +65,7 @@ PreferenceTabManager::~PreferenceTabManager()
 void PreferenceTabManager::OnDataChanged()
 {
     callback_->on_state_changed();
+    drp::DiscordHandler::GetInstance().OnSettingsChanged();
 }
 
 HWND PreferenceTabManager::get_wnd()
