@@ -146,6 +146,7 @@ void PresenceModifier::UpdateImage(const pfc::string8& url)
     
     metadb_handle_ptr p_out;
     bool gSuccess = false;
+    bool hasCachedUrl = false;
     metadb_index_hash hash;
 
     // Check if we want to use artwork and it already exists
@@ -161,23 +162,30 @@ void PresenceModifier::UpdateImage(const pfc::string8& url)
             if ( rec.artwork_url.get_length() > 0 )
             {
                 setImageKey( qwr::u8string( rec.artwork_url ), presenceData_ );
-                return;
+                hasCachedUrl = true;
+                if ( !uploader::usesUrlPlaceholder(config::uploadArtworkCommand.GetValue()) )
+                {
+                    return; //  normal behaviour, not using {url} so we don't care about passing it *every time*
+                }
             }
         }
     }
 
-    switch ( config::largeImageSettings )
+    if (!hasCachedUrl)
     {
-    case config::ImageSetting::Light:
-    {
-        setImageKey( config::largeImageId_Light, presenceData_ );
-        break;
-    }
-    case config::ImageSetting::Dark:
-    {
-        setImageKey( config::largeImageId_Dark, presenceData_ );
-        break;
-    }
+        switch ( config::largeImageSettings )
+        {
+        case config::ImageSetting::Light:
+        {
+            setImageKey( config::largeImageId_Light, presenceData_ );
+            break;
+        }
+        case config::ImageSetting::Dark:
+        {
+            setImageKey( config::largeImageId_Dark, presenceData_ );
+            break;
+        }
+        }
     }
 
     if (config::uploadArtwork && gSuccess)

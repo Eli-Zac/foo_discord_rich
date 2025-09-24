@@ -28,6 +28,7 @@ struct artwork_info
 
 bool extractAndUploadArtwork( const metadb_handle_ptr track, abort_callback &abort, pfc::string8 &artwork_url, metadb_index_hash hash, const bool regenerate = false );
 artwork_info extractArtwork( const metadb_handle_ptr track, abort_callback &abort );
-pfc::string8 uploadArtwork( artwork_info& art, abort_callback &abort );
+pfc::string8 uploadArtwork( artwork_info& art, abort_callback &abort, metadb_index_hash hash = metadb_index_hash() );
+bool usesUrlPlaceholder( const std::string &commandString );
 
 } // namespace drp::uploader

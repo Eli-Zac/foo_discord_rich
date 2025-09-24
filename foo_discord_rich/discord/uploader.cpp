@@ -137,7 +137,17 @@ bool extractAndUploadArtwork(const metadb_handle_ptr track, abort_callback &abor
 #ifdef _DEBUG
         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Artwork path after extract " << artwork.path;
 #endif
-        artwork_url = uploadArtwork( artwork, abort );
+        artwork_url = uploadArtwork( artwork, abort, hash );
+        if (artwork_url.get_length() > 0)
+        {
+            drp::artwork_url_set( hash, artwork_url );
+            return true;
+        }
+    }
+    else if (usesUrlPlaceholder(config::uploadArtworkCommand.GetValue()))
+    {
+        // Artwork extraction failed but command uses {url} placeholder, so proceed with uploadArtwork
+        artwork_url = uploadArtwork( artwork, abort, hash );
         if (artwork_url.get_length() > 0)
         {
             drp::artwork_url_set( hash, artwork_url );
@@ -416,12 +426,12 @@ std::wstring to_wstring(const std::string &str)
     When placeholder string {filepath} is found, it'll substitute it and pass it as a positional argument, skipping stdin.
     TODO: Add current URL with {cachedurl}, this would allow a script to verify it's still up and skip it OR pass it back (do we want that?)
 */
-std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandString, const std::string &filepath = "")
+std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandString, const std::string &filepath = "", const std::string &url = "")
 {
     std::string processedCommand = commandString;
 
     // Replace all {filepath} placeholders if present
-    const std::string placeholder = "{filepath}";
+    const std::string filepathPlaceholder = "{filepath}";
     size_t placeholderPos = 0;
 
     // Quote filepath if it contains spaces
@@ -431,9 +441,23 @@ std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandStr
     }
 
     // Replace all occurrences of {filepath}
-    while ((placeholderPos = processedCommand.find(placeholder, placeholderPos)) != std::string::npos) {
-        processedCommand.replace(placeholderPos, placeholder.length(), quotedFilepath);
+    while ((placeholderPos = processedCommand.find(filepathPlaceholder, placeholderPos)) != std::string::npos) {
+        processedCommand.replace(placeholderPos, filepathPlaceholder.length(), quotedFilepath);
         placeholderPos += quotedFilepath.length(); // Move past the replacement
+    }
+
+    // Replace all {url} placeholders if present
+    const std::string urlPlaceholder = "{url}";
+    placeholderPos = 0;
+    // Quote url if it contains spaces
+    std::string quotedUrl = url;
+    if (!url.empty() && url.find(' ') != std::string::npos && url[0] != '"') {
+        quotedUrl = "\"" + url + "\"";
+    }
+    // Replace all occurrences of {url}
+    while ((placeholderPos = processedCommand.find(urlPlaceholder, placeholderPos)) != std::string::npos) {
+        processedCommand.replace(placeholderPos, urlPlaceholder.length(), quotedUrl);
+        placeholderPos += quotedUrl.length(); // Move past the replacement
     }
 
     std::wstring cmd_w = to_wstring(processedCommand);
@@ -644,16 +668,55 @@ bool uploadOpenProcess(const std::wstring &executable, const std::wstring &cmd_w
     return false;
 }
 
-pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort)
+bool usesUrlPlaceholder(const std::string &commandString)
+{
+    return commandString.find("{url}") != std::string::npos;
+}
+
+pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_index_hash hash)
 {
     pfc::string8 artwork_url = "";
+    pfc::string8 cached_url = "";
 
-    if ( check_artwork_hash(art, abort, artwork_url) )
+    //  Hit both URL stores in priority order
+    //  URL check: metadb (uploader but can also be set by user manually), does it exist, and do we think it's valid?
+    if (hash != metadb_index_hash())
     {
-        return artwork_url;
+        auto rec = record_get(hash);
+        if (rec.artwork_url.get_length() > 0 && isValidUrl(rec.artwork_url))
+        {
+            cached_url = rec.artwork_url;
+        }
+    }
+    // URL check: hash list (only the uploader writes to it), lower priority
+    if (cached_url.get_length() == 0)
+    {
+        pfc::string8 hash_url;
+        check_artwork_hash(art, abort, hash_url);
+        if (hash_url.get_length() > 0 && isValidUrl(hash_url))
+        {
+            cached_url = hash_url;
+        }
     }
 
     const std::string commandString = config::uploadArtworkCommand.GetValue();
+
+    // If we have a cached URL but command doesn't use {url} placeholder, return the cached URL
+    if ( cached_url.get_length() > 0 )
+    {
+        if ( commandString.length() == 0 || !usesUrlPlaceholder(commandString) )
+        {
+            #ifdef _DEBUG
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Using cached URL directly (no {url} placeholder): " << cached_url.c_str();
+            #endif
+            return cached_url;
+        }
+        // If command uses {url} placeholder, continue execution w/ cached URL
+        #ifdef _DEBUG
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Found cached URL, will call external tool with {url} placeholder: " << cached_url.c_str();
+        #endif
+    }
+
     if ( commandString.length() == 0 )
     {
         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": No upload command given";
@@ -709,27 +772,55 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort)
          PROCESS_INFORMATION piProcInfo; 
          ZeroMemory( &piProcInfo, sizeof(PROCESS_INFORMATION) );
 
+         // {filepath} and {url} placeholder checks
+         const bool hasFilePathPlaceholder = usesFilePathPlaceholder(commandString);
+         const bool hasUrlPlaceholder = usesUrlPlaceholder(commandString);
+
          #ifdef _DEBUG
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Upload command " << commandString;
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cover file path " << filepath;
+         if (hasUrlPlaceholder) {
+             FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cached URL being passed: " << cached_url.c_str();
+         }
          #endif
 
-         // {filepath} placeholder check
-         const bool usesPlaceholder = usesFilePathPlaceholder(commandString);
-
          // Parse the command to separate executable from full command line
-         // If we're using a placeholder, substitute it. We may add more later.
-         const auto parsedCmd = parseCommand(commandString, usesPlaceholder ? filepath.c_str() : "");
+         // Pass filepath and/or URL if placeholders are used
+         const auto parsedCmd = parseCommand(commandString,
+             hasFilePathPlaceholder ? filepath.c_str() : "",
+             hasUrlPlaceholder ? cached_url.c_str() : "");
          const auto& executable = parsedCmd.first;
          const auto& fullCmdLine = parsedCmd.second;
 
+         #ifdef _DEBUG
+         qwr::u8string fullCmd_utf8;
+         fullCmd_utf8 = qwr::unicode::ToU8(fullCmdLine);
+         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Final command after placeholder substitution: " << fullCmd_utf8;
+         #endif
+
          abort.check();
 
-         // If using placeholder, skip writing to stdin, the user should not need that
-         // If not using placeholder, use stdin for backwards compatibility
+         // If using any placeholder, skip writing to stdin, the user should not need that
+         // If not using *any* placeholder, use stdin for backwards compatibility, assume user has older upload script
          uploadOpenProcess(executable, fullCmdLine, filepath_c, artwork_url,
              siStartInfo, piProcInfo,
-             g_hChildStd_OUT_Wr, g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, !usesPlaceholder);
+             g_hChildStd_OUT_Wr, g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, !(hasFilePathPlaceholder || hasUrlPlaceholder));
+
+         #ifdef _DEBUG
+         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": External command returned: '" << (artwork_url.get_length() > 0 ? artwork_url.c_str() : "(empty)") << "'";
+         #endif
+
+         // If using {url} placeholder and external command returned empty, return cached URL directly
+         if (hasUrlPlaceholder && artwork_url.get_length() == 0) {
+             #ifdef _DEBUG
+             FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": External command returned empty, falling back to cached URL: " << cached_url.c_str();
+             #endif
+             if ( deleteFile )
+             {
+                 filesystem::g_remove(tempFile, abort);
+             }
+             return cached_url;
+         }
      } catch (...)
      {
          closePipes(g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, g_hChildStd_OUT_Wr);
@@ -753,8 +844,11 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort)
     if (artwork_url.get_length() > 0)
     {
         set_artwork_url_hash(artwork_url, art.artwork_hash, abort);
+        #ifdef _DEBUG
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Using external command result: " << artwork_url.c_str();
+        #endif
     }
-    
+
     return artwork_url;
 }
 
