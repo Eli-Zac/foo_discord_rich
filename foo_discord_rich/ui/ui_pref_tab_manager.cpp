@@ -65,7 +65,6 @@ PreferenceTabManager::~PreferenceTabManager()
 void PreferenceTabManager::OnDataChanged()
 {
     callback_->on_state_changed();
-    drp::DiscordHandler::GetInstance().OnSettingsChanged();
 }
 
 HWND PreferenceTabManager::get_wnd()
@@ -91,8 +90,8 @@ void PreferenceTabManager::apply()
         tab->apply();
     }
 
-    OnDataChanged();
     drp::DiscordHandler::GetInstance().OnSettingsChanged();
+    OnDataChanged();
 }
 
 void PreferenceTabManager::reset()
