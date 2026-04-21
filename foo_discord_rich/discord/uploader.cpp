@@ -516,10 +516,10 @@ std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandStr
 
         return "\"" + value + "\"";
     };
-    auto substitutePlaceholder = []( std::string& command,
-                                     const std::string& placeholder,
-                                     const std::string& value,
-                                     const bool autoQuote ) {
+    auto substitutePlaceholder = [quoteIfNeeded]( std::string& command,
+                                                  const std::string& placeholder,
+                                                  const std::string& value,
+                                                  const bool autoQuote ) {
         size_t placeholderPos = 0;
         while ( ( placeholderPos = command.find( placeholder, placeholderPos ) ) != std::string::npos )
         {
