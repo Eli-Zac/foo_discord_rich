@@ -48,6 +48,8 @@ bool PresenceData::operator==( const PresenceData& other )
              && areStringsSame( presence.largeImageText, other.presence.largeImageText )
              && areStringsSame( presence.smallImageKey, other.presence.smallImageKey )
              && areStringsSame( presence.smallImageText, other.presence.smallImageText )
+             && presence.activityType == other.presence.activityType
+             && presence.statusDisplayType == other.presence.statusDisplayType
              && presence.startTimestamp == other.presence.startTimestamp
              && presence.endTimestamp == other.presence.endTimestamp
              && trackLength == other.trackLength );
