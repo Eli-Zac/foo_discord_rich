@@ -45,13 +45,14 @@ def setup( skip_submodules_download,
 
     if (not skip_submodules_download):
         call_decorator('Downloading submodules')(download_submodules.download)()
+
+    if (not skip_submodules_patches):
         call_decorator("Configuring Discord RPC")(configure_discord_rpc.configure)()
-        if (not skip_submodules_patches):
-            call_decorator('Patching fb2k submodules')(
-                load_module(scripts_path/'patch_fb2k_submodules.py').patch
-            )(
-                root_dir=root_dir
-            )
+        call_decorator('Patching fb2k submodules')(
+            load_module(scripts_path/'patch_fb2k_submodules.py').patch
+        )(
+            root_dir=root_dir
+        )
 
     call_decorator('Version header generation')(
         load_module(scripts_path/'generate_version_header.py').generate_header_custom
