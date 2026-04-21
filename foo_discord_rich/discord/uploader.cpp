@@ -131,15 +131,15 @@ static bool materializeArtworkTempFile(const artwork_info& art,
     const auto filename = pfc::string8((ts.substr(std::max(ts.size(), (size_t)10) - 10) + "." + ext).c_str());
 
     tempDir.add_filename(filename.c_str());
-    filepath = tempDir;
+    const auto rawTempPath = tempDir;
     deleteFile = true;
 
     #ifdef _DEBUG
-    FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": full temp filepath " << filepath;
+    FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": full temp filepath " << rawTempPath;
     #endif
 
-    // UTF-8 might cause problems?
-    tempFile = filepath;
+    // Keep the raw foobar path for file operations, but expose a direct local path to the external uploader.
+    tempFile = rawTempPath;
     {
         service_ptr_t<file> file_ptr;
         // File gets released after file_ptr has been deleted
@@ -147,6 +147,12 @@ static bool materializeArtworkTempFile(const artwork_info& art,
         file_ptr->write( art.data->get_ptr(), art.data->get_size(), abort );
     }
 
+    if (tryGetDirectArtworkFilepath(rawTempPath, filepath))
+    {
+        return true;
+    }
+
+    filepath = rawTempPath;
     return true;
 }
 
