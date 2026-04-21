@@ -450,37 +450,39 @@ std::wstring to_wstring(const std::string &str)
 */
 std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandString, const std::string &filepath = "", const std::string &url = "")
 {
+    auto quoteIfNeeded = []( const std::string& value ) -> std::string {
+        if ( value.empty() || value.find( ' ' ) == std::string::npos || value[0] == '"' )
+        {
+            return value;
+        }
+
+        return "\"" + value + "\"";
+    };
+    auto substitutePlaceholder = []( std::string& command,
+                                     const std::string& placeholder,
+                                     const std::string& value,
+                                     const bool autoQuote ) {
+        size_t placeholderPos = 0;
+        while ( ( placeholderPos = command.find( placeholder, placeholderPos ) ) != std::string::npos )
+        {
+            const size_t placeholderEnd = placeholderPos + placeholder.length();
+            const bool isAlreadyQuoted = ( placeholderPos > 0 && placeholderEnd < command.size()
+                                           && command[placeholderPos - 1] == '"'
+                                           && command[placeholderEnd] == '"' );
+
+            const auto replacement = ( autoQuote && !isAlreadyQuoted )
+                                         ? quoteIfNeeded( value )
+                                         : value;
+
+            command.replace( placeholderPos, placeholder.length(), replacement );
+            placeholderPos += replacement.length();
+        }
+    };
+
     std::string processedCommand = commandString;
 
-    // Replace all {filepath} placeholders if present
-    const std::string filepathPlaceholder = "{filepath}";
-    size_t placeholderPos = 0;
-
-    // Quote filepath if it contains spaces
-    std::string quotedFilepath = filepath;
-    if (!filepath.empty() && filepath.find(' ') != std::string::npos && filepath[0] != '"') {
-        quotedFilepath = "\"" + filepath + "\"";
-    }
-
-    // Replace all occurrences of {filepath}
-    while ((placeholderPos = processedCommand.find(filepathPlaceholder, placeholderPos)) != std::string::npos) {
-        processedCommand.replace(placeholderPos, filepathPlaceholder.length(), quotedFilepath);
-        placeholderPos += quotedFilepath.length(); // Move past the replacement
-    }
-
-    // Replace all {url} placeholders if present
-    const std::string urlPlaceholder = "{url}";
-    placeholderPos = 0;
-    // Quote url if it contains spaces
-    std::string quotedUrl = url;
-    if (!url.empty() && url.find(' ') != std::string::npos && url[0] != '"') {
-        quotedUrl = "\"" + url + "\"";
-    }
-    // Replace all occurrences of {url}
-    while ((placeholderPos = processedCommand.find(urlPlaceholder, placeholderPos)) != std::string::npos) {
-        processedCommand.replace(placeholderPos, urlPlaceholder.length(), quotedUrl);
-        placeholderPos += quotedUrl.length(); // Move past the replacement
-    }
+    substitutePlaceholder( processedCommand, "{filepath}", filepath, true );
+    substitutePlaceholder( processedCommand, "{url}", url, false );
 
     std::wstring cmd_w = to_wstring(processedCommand);
     std::wstring executable;
