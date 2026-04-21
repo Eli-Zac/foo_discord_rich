@@ -1,0 +1,98 @@
+diff --git a/submodules/fb2k_utils/src/qwr/fb2k_config_ui_option.h b/submodules/fb2k_utils/src/qwr/fb2k_config_ui_option.h
+index 9b42597..f214012 100644
+--- a/submodules/fb2k_utils/src/qwr/fb2k_config_ui_option.h
++++ b/submodules/fb2k_utils/src/qwr/fb2k_config_ui_option.h
+@@ -36,7 +36,7 @@ public:
+         return *this;
+     }
+ 
+-    UiOption& operator=( int value ) requires std::is_convertible_v<typename T::value_type, int> && !std::is_same_v<typename T::value_type, int>
++    UiOption& operator=( int value ) requires ( std::is_convertible_v<typename T::value_type, int> && !std::is_same_v<typename T::value_type, int> )
+     {
+         SetValue( static_cast<value_type>( value ) );
+         return *this;
+@@ -47,7 +47,7 @@ public:
+         return GetCurrentValue();
+     }
+ 
+-    explicit operator int() const requires std::is_convertible_v<typename T::value_type, int> && !std::is_same_v<typename T::value_type, int>
++    explicit operator int() const requires ( std::is_convertible_v<typename T::value_type, int> && !std::is_same_v<typename T::value_type, int> )
+     {
+         return GetCurrentValue();
+     }
+diff --git a/submodules/fb2k_utils/src/qwr/pfc_helpers_cnt.h b/submodules/fb2k_utils/src/qwr/pfc_helpers_cnt.h
+index d1256b4..19603e9 100644
+--- a/submodules/fb2k_utils/src/qwr/pfc_helpers_cnt.h
++++ b/submodules/fb2k_utils/src/qwr/pfc_helpers_cnt.h
+@@ -139,7 +139,7 @@ public:
+             return ( *pPfc_ )[curIdx_];
+         }
+         
+-        pointer operator->() const requires !is_pfc_list_const::value
++        pointer operator->() const requires ( !is_pfc_list_const::value )
+         {
+             return &( **this );
+         }
+@@ -236,7 +236,7 @@ public:
+             return ( const_cast<reference>( const_iterator::operator*() ) );
+         }
+         
+-        pointer operator->() const requires !is_pfc_list_const::value
++        pointer operator->() const requires ( !is_pfc_list_const::value )
+         {
+             return ( const_cast<pointer>( const_iterator::operator->() ) );
+         }
+@@ -254,7 +254,7 @@ public:
+         : pfc_( base ){};
+ 
+     template <typename... Args>
+-    Stl( Args&&... args ) requires !std::is_reference_v<T>
++    Stl( Args&&... args ) requires ( !std::is_reference_v<T> )
+         : pfc_( std::forward<Args>( args )... ){};
+ 
+     Stl( const Stl& ) = delete;
+@@ -269,7 +269,7 @@ public:
+     // bool operator<=( const Stl& ) const; //optional
+     // bool operator>=( const Stl& ) const; //optional
+ 
+-    iterator begin() requires !std::is_const_v<std::remove_reference_t<T>>
++    iterator begin() requires ( !std::is_const_v<std::remove_reference_t<T>> )
+     {
+         return iterator( 0, &pfc_ );
+     }
+@@ -283,7 +283,7 @@ public:
+         return begin();
+     }
+ 
+-    iterator end() requires !std::is_const_v<std::remove_reference_t<T>>
++    iterator end() requires ( !std::is_const_v<std::remove_reference_t<T>> )
+     {
+         return iterator( size(), &pfc_ );
+     }
+@@ -353,7 +353,7 @@ public:
+     {
+         if ( idx >= this->size() )
+         {
+-            throw std::out_of_range;
++            throw std::out_of_range( "index out of range" );
+         }
+         return this->operator[]( idx );
+     }
+@@ -361,7 +361,7 @@ public:
+     {
+         if ( idx >= this->size() )
+         {
+-            throw std::out_of_range;
++            throw std::out_of_range( "index out of range" );
+         }
+         return this->operator[]( idx );
+     }
+@@ -407,7 +407,7 @@ public:
+     }
+ 
+ public:
+-    pfc_container_type& Pfc() requires !std::is_const_v<std::remove_reference_t<T>>
++    pfc_container_type& Pfc() requires ( !std::is_const_v<std::remove_reference_t<T>> )
+     {
+         return pfc_;
+     }

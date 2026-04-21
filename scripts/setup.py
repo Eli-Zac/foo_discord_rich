@@ -83,10 +83,13 @@ def setup( skip_submodules_download,
         component_name='Discord Rich Presence Integration'
     )
 
-    fb2k_patch = Path(__file__).parent.absolute().joinpath('additional_files', 'fb2k_utils_x64.patch')
+    fb2k_patches = [
+        cur_dir / 'additional_files' / 'fb2k_utils_x64.patch',
+        cur_dir / 'additional_files' / 'fb2k_utils_clang_compat.patch',
+    ]
     call_decorator('Patch fb2k_utils')(
         patch
-    )([fb2k_patch])
+    )(fb2k_patches)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Setup project')
