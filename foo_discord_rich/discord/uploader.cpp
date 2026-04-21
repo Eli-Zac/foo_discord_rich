@@ -47,6 +47,28 @@ private:
 // Must initialize static class variables outside of the class
 std::mutex upload_lock::lock_;
 
+static bool hasArtworkData(const artwork_info& art)
+{
+    return art.data.is_valid();
+}
+
+static bool hasArtworkSource(const artwork_info& art)
+{
+    return strlen(art.path) > 0 || hasArtworkData(art);
+}
+
+static void ensureArtworkHash(artwork_info& art)
+{
+    if (art.artwork_hash.get_length() > 0 || !hasArtworkData(art))
+    {
+        return;
+    }
+
+    art.artwork_hash = static_api_ptr_t<hasher_md5>()
+        ->process_single(art.data->get_ptr(), art.data->get_size())
+        .asString();
+}
+
 threaded_process_artwork_uploader::threaded_process_artwork_uploader(
     const pfc::map_t<metadb_index_hash, metadb_handle_ptr>& hashes, const bool regenerate) : hashes_(hashes), regenerate_(regenerate)
 {}
@@ -677,6 +699,9 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
 {
     pfc::string8 artwork_url = "";
     pfc::string8 cached_url = "";
+    const std::string commandString = config::uploadArtworkCommand.GetValue();
+    const bool hasFilePathPlaceholder = usesFilePathPlaceholder(commandString);
+    const bool hasUrlPlaceholder = usesUrlPlaceholder(commandString);
 
     //  Hit both URL stores in priority order
     //  URL check: metadb (uploader but can also be set by user manually), does it exist, and do we think it's valid?
@@ -689,7 +714,7 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
         }
     }
     // URL check: hash list (only the uploader writes to it), lower priority
-    if (cached_url.get_length() == 0)
+    if (cached_url.get_length() == 0 && hasArtworkData(art))
     {
         pfc::string8 hash_url;
         check_artwork_hash(art, abort, hash_url);
@@ -699,12 +724,10 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
         }
     }
 
-    const std::string commandString = config::uploadArtworkCommand.GetValue();
-
     // If we have a cached URL but command doesn't use {url} placeholder, return the cached URL
     if ( cached_url.get_length() > 0 )
     {
-        if ( commandString.length() == 0 || !usesUrlPlaceholder(commandString) )
+        if ( commandString.length() == 0 || !hasUrlPlaceholder )
         {
             #ifdef _DEBUG
             FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Using cached URL directly (no {url} placeholder): " << cached_url.c_str();
@@ -731,18 +754,44 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
     }
 
     pfc::string8 tempFile;
-    bool deleteFile;
-    auto filepath = getArtworkFilepath(art, abort, tempFile, deleteFile);
+    bool deleteFile = false;
+    pfc::string8 filepath;
 
-    const auto filepath_c = filepath.c_str();
+    if (hasArtworkSource(art))
+    {
+        filepath = getArtworkFilepath(art, abort, tempFile, deleteFile);
+        const auto filepath_c = filepath.c_str();
 
-    // Must validate the file path we're substituting the token with exists
-    if (usesFilePathPlaceholder(commandString) && !filesystem::g_exists(filepath_c, abort)) {
-        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Warning: artwork file path does not exist: " << filepath;
-        // Keep going, could not be there yet? I think it may trigger and still work *clueless*
+        // Must validate the file path we're substituting the token with exists
+        if (hasFilePathPlaceholder && !filesystem::g_exists(filepath_c, abort)) {
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Warning: artwork file path does not exist: " << filepath;
+            // Keep going, could not be there yet? I think it may trigger and still work *clueless*
+        }
+    }
+    else
+    {
+        if (!hasUrlPlaceholder)
+        {
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": No artwork available for upload command";
+            return artwork_url;
+        }
+
+        if (cached_url.get_length() == 0)
+        {
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cannot execute {url} upload command without a cached artwork URL";
+            return artwork_url;
+        }
+
+        if (hasFilePathPlaceholder)
+        {
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cannot execute upload command with {filepath} when artwork extraction failed";
+            return cached_url;
+        }
     }
 
     abort.check();
+
+    const auto filepath_c = filepath.c_str();
    
     HANDLE g_hChildStd_IN_Rd = NULL;
     HANDLE g_hChildStd_IN_Wr = NULL;
@@ -771,10 +820,6 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
 
          PROCESS_INFORMATION piProcInfo; 
          ZeroMemory( &piProcInfo, sizeof(PROCESS_INFORMATION) );
-
-         // {filepath} and {url} placeholder checks
-         const bool hasFilePathPlaceholder = usesFilePathPlaceholder(commandString);
-         const bool hasUrlPlaceholder = usesUrlPlaceholder(commandString);
 
          #ifdef _DEBUG
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Upload command " << commandString;
@@ -843,7 +888,11 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
 
     if (artwork_url.get_length() > 0)
     {
-        set_artwork_url_hash(artwork_url, art.artwork_hash, abort);
+        ensureArtworkHash(art);
+        if (art.artwork_hash.get_length() > 0)
+        {
+            set_artwork_url_hash(artwork_url, art.artwork_hash, abort);
+        }
         #ifdef _DEBUG
         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Using external command result: " << artwork_url.c_str();
         #endif

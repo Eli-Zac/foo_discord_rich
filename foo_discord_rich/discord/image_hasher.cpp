@@ -140,6 +140,11 @@ bool prepare_static_hash_json( abort_callback& abort )
 
 bool check_artwork_hash(artwork_info &artwork, abort_callback &abort, pfc::string8 &artwork_url)
 {
+    if (!artwork.data.is_valid())
+    {
+        return false;
+    }
+
     const auto md5 = static_api_ptr_t<hasher_md5>()->process_single(artwork.data->get_ptr(), artwork.data->get_size()).asString();
     artwork.artwork_hash = md5;
 
