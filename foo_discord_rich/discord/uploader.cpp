@@ -69,6 +69,87 @@ static void ensureArtworkHash(artwork_info& art)
         .asString();
 }
 
+static bool tryGetDirectArtworkFilepath(const pfc::string8& rawPath, pfc::string8& filepath)
+{
+    if (rawPath.get_length() == 0)
+    {
+        return false;
+    }
+
+    filepath = rawPath;
+    if (filepath.has_prefix("file://"))
+    {
+        // Remove file:// protocol since the program expects a file path instead of a uri
+        if (filepath.replace_string("file://", "") > 1)
+        {
+            // This should never really be reached
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Multiple instances of \"file://\" replaced during cover upload";
+        }
+
+        return true;
+    }
+
+    return strstr(filepath.c_str(), "://") == nullptr;
+}
+
+static bool materializeArtworkTempFile(const artwork_info& art,
+                                       abort_callback& abort,
+                                       pfc::string8& filepath,
+                                       pfc::string8& tempFile,
+                                       bool& deleteFile)
+{
+    if (!hasArtworkData(art))
+    {
+        return false;
+    }
+
+    auto tempDir = core_api::pathInProfile(DRP_UNDERSCORE_NAME);
+
+    if (!filesystem::g_exists(tempDir.c_str(), abort))
+    {
+        filesystem::g_create_directory(tempDir.c_str(), abort);
+    }
+
+    // Get the image mime type since we cannot deduce it otherwise from embedded artwork
+    const auto api = fb2k::imageLoaderLite::tryGet();
+    std::string ext = "jpg";
+    if (api.is_valid())
+    {
+        const auto info = api->getInfo(art.data->get_ptr(), art.data->get_size(), abort);
+        abort.check();
+
+        const auto mime = std::string(info.mime);
+        // Use mime type extension for image/ mime types. Not perfect and will fail for some of the more exotic types like svg
+        if (mime.rfind("image/", 0) == 0)
+        {
+            ext = mime.substr(mime.find("/") + 1);
+        }
+    }
+
+    // Last 10 digits of current time for filename.
+    const auto ts = std::to_string(std::time(NULL));
+    const auto filename = pfc::string8((ts.substr(std::max(ts.size(), (size_t)10) - 10) + "." + ext).c_str());
+
+    tempDir.add_filename(filename.c_str());
+    filepath = tempDir;
+    deleteFile = true;
+
+    #ifdef _DEBUG
+    FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": full temp filepath " << filepath;
+    #endif
+
+    // UTF-8 might cause problems?
+    tempFile = filepath;
+    {
+        service_ptr_t<file> file_ptr;
+        // File gets released after file_ptr has been deleted
+        filesystem::g_open_write_new( file_ptr, tempFile, abort );
+        file_ptr->write( art.data->get_ptr(), art.data->get_size(), abort );
+    }
+
+    return true;
+}
+
 threaded_process_artwork_uploader::threaded_process_artwork_uploader(
     const pfc::map_t<metadb_index_hash, metadb_handle_ptr>& hashes, const bool regenerate) : hashes_(hashes), regenerate_(regenerate)
 {}
@@ -325,82 +406,59 @@ bool readFromPipe(HANDLE g_hChildStd_OUT_Rd, pfc::string8 &artwork_url)
     return rSuccess;
 }
 
-pfc::string8 getArtworkFilepath(const artwork_info& art, abort_callback &abort, pfc::string8 &tempFile, bool &deleteFile)
+bool getArtworkFilepath(const artwork_info& art,
+                        abort_callback& abort,
+                        pfc::string8& filepath,
+                        pfc::string8& tempFile,
+                        bool& deleteFile)
 {
     abort.check();
 
-    pfc::string8 filepath;
-
     // Tempfile assigned later to make sure the actual cover art is not deleted after uploading
+    filepath = "";
     tempFile = "";
-
     deleteFile = false;
 
-    // If cover art is not embedded just use that file as the input.
-    // No need to copy it to another folder
     if (strlen(art.path) > 0)
     {
-        filepath = pfc::string8(art.path);
+        pfc::string8 directPath;
+        if (tryGetDirectArtworkFilepath(art.path, directPath))
+        {
+            if (filesystem::g_exists(directPath.c_str(), abort))
+            {
+                filepath = directPath;
+                return true;
+            }
+
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                     << ": Artwork path is not accessible, falling back to extracted bytes: "
+                                     << directPath;
+        }
+        else
+        {
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                     << ": Artwork path is not a direct local file, falling back to extracted bytes: "
+                                     << art.path;
+        }
+    }
+
+    if (materializeArtworkTempFile(art, abort, filepath, tempFile, deleteFile))
+    {
+        return true;
+    }
+
+    if (strlen(art.path) > 0)
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Could not resolve a usable local artwork file for upload: "
+                                 << art.path;
     }
     else
     {
-        auto tempDir = core_api::pathInProfile(DRP_UNDERSCORE_NAME);
-
-        if (!filesystem::g_exists(tempDir.c_str(), abort))
-        {
-            filesystem::g_create_directory(tempDir.c_str(), abort);
-        }
-
-        // Get the image mime type since we cannot deduce it otherwise from embedded artwork
-        const auto api = fb2k::imageLoaderLite::tryGet();
-        std::string ext = "jpg";
-        if (api.is_valid())
-        {
-            const auto info = api->getInfo(art.data->get_ptr(), art.data->get_size(), abort);
-            abort.check();
-
-            const auto mime = std::string(info.mime);
-            // Use mime type extension for image/ mime types. Not perfect and will fail for some of the more exotic types like svg
-            if (mime.rfind("image/", 0) == 0)
-            {
-                ext = mime.substr(mime.find("/") + 1);
-            }
-        }
-
-        // Take the last 10 digits of current time and use that for filename.
-        // Should be good enough for this purpose as the file is deleted after the operation or overwritten in the future
-        const auto ts = std::to_string(std::time(NULL));
-        const auto filename = pfc::string8((ts.substr(std::max(ts.size(), (size_t)10) - 10) + "." + ext).c_str());
-
-        tempDir.add_filename(filename.c_str());
-        filepath = tempDir;
-        deleteFile = true;
-
-        #ifdef _DEBUG
-        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": full temp filepath " << filepath;
-        #endif
-
-        // UTF-8 might cause problems?
-        tempFile = filepath;
-        {
-            service_ptr_t<file> file_ptr;
-            // File gets released after file_ptr has been deleted
-            filesystem::g_open_write_new( file_ptr, tempFile, abort );
-            file_ptr->write( art.data->get_ptr(), art.data->get_size(), abort );
-        }
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Could not materialize artwork data for upload";
     }
 
-    if (filepath.has_prefix("file://"))
-    {
-        // Remove file:// protocol since the program expects a file path instead of a uri
-        if (filepath.replace_string("file://", "") > 1)
-        {
-            // This should never really be reached
-            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Multiple instances of \"file://\" replaced during cover upload";
-        }
-    }
-
-    return filepath;
+    return false;
 }
 
 std::wstring to_wstring(const std::string &str)
@@ -755,39 +813,25 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
         return artwork_url;
     }
 
+    const bool needsArtworkFile = hasFilePathPlaceholder || !hasUrlPlaceholder;
     pfc::string8 tempFile;
     bool deleteFile = false;
     pfc::string8 filepath;
 
-    if (hasArtworkSource(art))
+    if (needsArtworkFile)
     {
-        filepath = getArtworkFilepath(art, abort, tempFile, deleteFile);
-        const auto filepath_c = filepath.c_str();
-
-        // Must validate the file path we're substituting the token with exists
-        if (hasFilePathPlaceholder && !filesystem::g_exists(filepath_c, abort)) {
-            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Warning: artwork file path does not exist: " << filepath;
-            // Keep going, could not be there yet? I think it may trigger and still work *clueless*
-        }
-    }
-    else
-    {
-        if (!hasUrlPlaceholder)
+        if (!getArtworkFilepath(art, abort, filepath, tempFile, deleteFile))
         {
-            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": No artwork available for upload command";
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Could not resolve a usable artwork file for upload command";
             return artwork_url;
         }
-
+    }
+    else if (!hasArtworkSource(art))
+    {
         if (cached_url.get_length() == 0)
         {
             FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cannot execute {url} upload command without a cached artwork URL";
             return artwork_url;
-        }
-
-        if (hasFilePathPlaceholder)
-        {
-            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cannot execute upload command with {filepath} when artwork extraction failed";
-            return cached_url;
         }
     }
 
