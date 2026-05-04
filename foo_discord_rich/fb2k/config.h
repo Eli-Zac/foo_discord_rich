@@ -67,6 +67,7 @@ extern qwr::fb2k::ConfigString artworkOverrideUrl;
 extern qwr::fb2k::ConfigBool disableWhenPaused;
 extern qwr::fb2k::ConfigBool swapSmallImages;
 extern qwr::fb2k::ConfigBool uploadArtwork;
+extern qwr::fb2k::ConfigBool autoUploadArtwork;
 
 std::string TrimWhitespace( std::string_view raw );
 void EnsureUploaderPreferencesMigrated();

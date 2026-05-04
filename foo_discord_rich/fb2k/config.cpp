@@ -54,6 +54,7 @@ qwr::fb2k::ConfigString artworkOverrideUrl( guid::conf_artwork_override_url, "" 
 qwr::fb2k::ConfigBool disableWhenPaused( guid::conf_disable_when_paused, false );
 qwr::fb2k::ConfigBool swapSmallImages( guid::conf_swap_small_images, false );
 qwr::fb2k::ConfigBool uploadArtwork( guid::conf_upload_artwork, false );
+qwr::fb2k::ConfigBool autoUploadArtwork( guid::conf_auto_upload_artwork, true );
 
 namespace
 {

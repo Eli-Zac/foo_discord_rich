@@ -180,6 +180,12 @@ uploader::UploadOptions makeRuntimeUploadOptions( ArtworkMode mode )
     return options;
 }
 
+bool ShouldAutomaticallyUploadArtwork()
+{
+    return config::autoUploadArtwork
+           && config::uploadArtwork;
+}
+
 } // namespace
 
 void PresenceModifier::UpdateImage()
@@ -238,7 +244,9 @@ void PresenceModifier::UpdateImage()
         if ( hasCanonicalUrl )
         {
             setImageKey( rec.artwork_url.toString(), pd );
-            if ( !uploader::usesUrlPlaceholder( config::uploadArtworkCommand.GetValue() ) )
+            if ( !ShouldAutomaticallyUploadArtwork()
+                 || config::GetValidatedUploaderMode() != config::UploaderMode::CustomCommand
+                 || !uploader::usesUrlPlaceholder( config::uploadArtworkCommand.GetValue() ) )
             {
                 return;
             }
@@ -252,14 +260,30 @@ void PresenceModifier::UpdateImage()
         {
             return;
         }
-    }
-    else
-    {
-        setHiddenFallbackImage( pd );
-        if ( !gSuccess )
+
+        if ( !ShouldAutomaticallyUploadArtwork() )
         {
             return;
         }
+    }
+    else
+    {
+        if ( !ShouldAutomaticallyUploadArtwork() )
+        {
+            const auto blurredArtworkUrl = GetEligibleBlurredArtworkUrl( rec );
+            if ( uploader::isValidUrl( blurredArtworkUrl ) )
+            {
+                setImageKey( blurredArtworkUrl.toString(), pd );
+            }
+            else
+            {
+                setHiddenFallbackImage( pd );
+            }
+
+            return;
+        }
+
+        setHiddenFallbackImage( pd );
     }
 
     const auto options = makeRuntimeUploadOptions( artworkMode );
