@@ -1,8 +1,21 @@
 ﻿#pragma once
 
+#include <cstdint>
+#include <string>
+
+#include <fb2k/artwork_metadb.h>
+
 namespace drp::uploader
 {
 
+struct UploadOptions
+{
+    ArtworkMode mode = ArtworkMode::Normal;
+    bool regenerate = false;
+    bool allowCachedReuse = true;
+    bool allowUrlPlaceholderReuse = true;
+    uint32_t blurPercent = 0;
+};
 
 class threaded_process_artwork_uploader : public threaded_process_callback
 {
@@ -26,9 +39,19 @@ struct artwork_info
     pfc::string8 artwork_hash{};
 };
 
-bool extractAndUploadArtwork( const metadb_handle_ptr track, abort_callback &abort, pfc::string8 &artwork_url, metadb_index_hash hash, const bool regenerate = false );
+bool extractAndUploadArtwork( const metadb_handle_ptr track,
+                              abort_callback &abort,
+                              pfc::string8 &artwork_url,
+                              metadb_index_hash hash,
+                              const UploadOptions& options = {},
+                              bool* recordChanged = nullptr );
 artwork_info extractArtwork( const metadb_handle_ptr track, abort_callback &abort );
-pfc::string8 uploadArtwork( artwork_info& art, abort_callback &abort, metadb_index_hash hash = metadb_index_hash() );
+pfc::string8 uploadArtwork( artwork_info& art,
+                            abort_callback &abort,
+                            const UploadOptions& options = {},
+                            metadb_index_hash hash = metadb_index_hash() );
 bool usesUrlPlaceholder( const std::string &commandString );
+bool usesBlurPercentPlaceholder( const std::string &commandString );
+bool isValidUrl( const pfc::string8 &url );
 
 } // namespace drp::uploader

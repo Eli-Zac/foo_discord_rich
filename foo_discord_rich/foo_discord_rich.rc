@@ -77,9 +77,9 @@ BEGIN
     LTEXT           "Bottom",IDC_STATIC,12,74,24,8
     EDITTEXT        IDC_TEXTBOX_STATE,12,86,301,12,ES_AUTOHSCROLL
     CTEXT           "?",IDC_LINK_FORMAT_HELP,309,26,8,8
-    GROUPBOX        "Foobar2000 image",IDC_STATIC,6,110,101,55
-    CONTROL         "Light image",IDC_RADIO_IMG_LIGHT,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,15,123,52,10
-    CONTROL         "Dark image",IDC_RADIO_IMG_DARK,"Button",BS_AUTORADIOBUTTON,15,136,51,10
+    GROUPBOX        "Primary image",IDC_STATIC,6,110,101,55
+    CONTROL         "Light fallback",IDC_RADIO_IMG_LIGHT,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,15,123,57,10
+    CONTROL         "Dark fallback",IDC_RADIO_IMG_DARK,"Button",BS_AUTORADIOBUTTON,15,136,56,10
     CONTROL         "Disabled",IDC_RADIO_IMG_DISABLED,"Button",BS_AUTORADIOBUTTON,15,149,43,10
     GROUPBOX        "Playback status image",IDC_STATIC,112,110,101,55
     CONTROL         "Light image",IDC_RADIO_PLAYBACK_IMG_LIGHT,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,121,123,56,10
@@ -104,12 +104,12 @@ IDD_PREFS_ADVANCED_TAB DIALOGEX 0, 0, 327, 268
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_SYSMENU
 FONT 8, "Tahoma", 400, 0, 0x0
 BEGIN
-    LTEXT           "Discord application token:",IDC_STATIC,13,16,87,8
+    LTEXT           "Discord application ID:",IDC_STATIC,13,16,87,8
     EDITTEXT        IDC_TEXTBOX_APP_TOKEN,101,15,203,12,ES_AUTOHSCROLL | WS_GROUP
-    GROUPBOX        "Resource IDs",IDC_STATIC,7,32,314,133
-    LTEXT           "Large image (light):",IDC_STATIC,17,53,72,8
+    GROUPBOX        "Discord resource IDs",IDC_STATIC,7,32,314,133
+    LTEXT           "Primary fallback (light):",IDC_STATIC,17,53,82,8
     EDITTEXT        IDC_TEXTBOX_LARGE_LIGHT_ID,101,52,203,12,ES_AUTOHSCROLL
-    LTEXT           "Large image (dark):",IDC_STATIC,17,72,72,8
+    LTEXT           "Primary fallback (dark):",IDC_STATIC,17,72,82,8
     EDITTEXT        IDC_TEXTBOX_LARGE_DARK_ID,101,71,203,12,ES_AUTOHSCROLL
     LTEXT           "Playing image (light):",IDC_STATIC,17,91,72,8
     EDITTEXT        IDC_TEXTBOX_SMALL_PLAYING_LIGHT_ID,101,90,203,12,ES_AUTOHSCROLL
@@ -119,15 +119,54 @@ BEGIN
     EDITTEXT        IDC_TEXTBOX_SMALL_PAUSED_LIGHT_ID,101,129,203,12,ES_AUTOHSCROLL
     LTEXT           "Paused image (dark):",IDC_STATIC,17,148,72,8
     EDITTEXT        IDC_TEXTBOX_SMALL_PAUSED_DARK_ID,101,147,203,12,ES_AUTOHSCROLL
-    GROUPBOX        "Artwork",IDC_STATIC,7,171,314,91
-    EDITTEXT        IDC_TEXTBOX_ARTWORK_COMMAND,101,209,203,12,ES_AUTOHSCROLL
-    LTEXT           "Artwork upload command",IDC_STATIC,17,207,72,18
-    CONTROL         "Upload artwork (front cover) and use it as the playing image",IDC_CHECK_UPLOAD_ARTWORK,
-                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,17,188,287,10
-    EDITTEXT        IDC_TEXTBOX_METADB_KEY,101,227,203,13,ES_AUTOHSCROLL
-    LTEXT           "Artwork identifier key",IDC_STATIC,17,229,72,8
-    LTEXT           "Process timeout (seconds)",IDC_STATIC,17,246,84,8
-    EDITTEXT        IDC_TEXTBOX_PROCESS_TIMEOUT,120,245,184,13,ES_AUTOHSCROLL
+END
+
+IDD_PREFS_ARTWORK_TAB DIALOGEX 0, 0, 327, 268
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_SYSMENU
+FONT 8, "Tahoma", 400, 0, 0x0
+BEGIN
+    GROUPBOX        "Upload behavior",IDC_STATIC,7,8,314,32
+    CONTROL         "Use uploaded artwork as the primary image",IDC_CHECK_UPLOAD_ARTWORK,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,17,22,287,10
+    GROUPBOX        "Grouping",IDC_STATIC,7,48,314,48
+    LTEXT           "Artwork Grouping Pattern (restart required)",IDC_STATIC,17,65,95,16
+    EDITTEXT        IDC_TEXTBOX_METADB_KEY,120,64,184,13,ES_AUTOHSCROLL
+    GROUPBOX        "Blur && privacy fallback",IDC_STATIC,7,102,314,54
+    LTEXT           "Blur Strength (%)",IDC_STATIC,17,119,53,8
+    EDITTEXT        IDC_TEXTBOX_BLUR_PERCENT,120,118,30,13,ES_AUTOHSCROLL
+    LTEXT           "1-100",IDC_STATIC,155,119,25,8
+    LTEXT           "Hidden/Blurred Fallback URL",IDC_STATIC,17,139,95,16
+    EDITTEXT        IDC_TEXTBOX_HIDDEN_PLACEHOLDER_URL,120,138,184,13,ES_AUTOHSCROLL
+    GROUPBOX        "Override",IDC_STATIC,7,162,314,62
+    CONTROL         "Override artwork URL",IDC_CHECK_OVERRIDE_ARTWORK_URL,
+                    "Button",BS_AUTOCHECKBOX | WS_TABSTOP,17,176,287,10
+    LTEXT           "Artwork override URL",IDC_STATIC,17,194,95,8
+    EDITTEXT        IDC_TEXTBOX_ARTWORK_OVERRIDE_URL,120,193,184,13,ES_AUTOHSCROLL
+    LTEXT           "When enabled, this URL is always used as the large image.",
+                    IDC_STATIC,17,208,287,8
+END
+
+IDD_PREFS_UPLOADER_TAB DIALOGEX 0, 0, 327, 268
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_SYSMENU
+FONT 8, "Tahoma", 400, 0, 0x0
+BEGIN
+    GROUPBOX        "Upload method",IDC_STATIC,7,8,314,44
+    CONTROL         "Bundled uploader",IDC_RADIO_UPLOADER_MODE_BUNDLED,
+                    "Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,17,22,76,10
+    CONTROL         "Custom command",IDC_RADIO_UPLOADER_MODE_CUSTOM_COMMAND,
+                    "Button",BS_AUTORADIOBUTTON,17,35,76,10
+    GROUPBOX        "Bundled uploader",IDC_STATIC,7,58,314,60
+    LTEXT           "Service",IDC_STATIC,17,75,45,8
+    COMBOBOX        IDC_COMBO_BUNDLED_UPLOADER_SERVICE,120,72,90,30,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "API key",IDC_STATIC,17,96,45,8
+    EDITTEXT        IDC_TEXTBOX_BUNDLED_UPLOADER_API_KEY,120,94,184,13,ES_AUTOHSCROLL
+    GROUPBOX        "Custom command",IDC_STATIC,7,124,314,84
+    LTEXT           "Artwork uploader command",IDC_STATIC,17,141,95,8
+    EDITTEXT        IDC_TEXTBOX_ARTWORK_COMMAND,120,140,184,13,ES_AUTOHSCROLL
+    LTEXT           "Placeholders: {filepath}, {blur_percent}",IDC_STATIC,17,160,160,8
+    LTEXT           "Custom command timeout (seconds)",IDC_STATIC,17,182,118,8
+    EDITTEXT        IDC_TEXTBOX_PROCESS_TIMEOUT,140,180,50,13,ES_AUTOHSCROLL
 END
 
 IDD_CTX_MENU_INPUT DIALOGEX 0, 0, 341, 73
@@ -137,7 +176,7 @@ FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     DEFPUSHBUTTON   "OK",IDOK,198,52,50,14
     PUSHBUTTON      "Cancel",IDCANCEL,284,52,50,14
-    LTEXT           "Artwork url (max 256 characters)",IDC_STATIC,22,15,200,10
+    LTEXT           "Artwork URL (max 256 characters)",IDC_STATIC,22,15,200,10
     EDITTEXT        IDC_TEXTBOX_URL,19,26,300,14,ES_AUTOHSCROLL
 END
 
@@ -168,6 +207,19 @@ BEGIN
         VERTGUIDE, 320
     END
 
+    IDD_PREFS_ARTWORK_TAB, DIALOG
+    BEGIN
+        VERTGUIDE, 7
+        VERTGUIDE, 17
+        VERTGUIDE, 120
+        VERTGUIDE, 304
+        VERTGUIDE, 321
+    END
+
+    IDD_PREFS_UPLOADER_TAB, DIALOG
+    BEGIN
+    END
+
     IDD_CTX_MENU_INPUT, DIALOG
     BEGIN
         LEFTMARGIN, 7
@@ -194,6 +246,16 @@ BEGIN
     0
 END
 
+IDD_PREFS_ARTWORK_TAB AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+IDD_PREFS_UPLOADER_TAB AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
 IDD_CTX_MENU_INPUT AFX_DIALOG_LAYOUT
 BEGIN
     0
@@ -213,4 +275,3 @@ END
 
 /////////////////////////////////////////////////////////////////////////////
 #endif    // not APSTUDIO_INVOKED
-

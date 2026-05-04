@@ -51,7 +51,7 @@ void PlaybackCallback::on_playback_new_track( metadb_handle_ptr track )
     auto pm = DiscordHandler::GetInstance().GetPresenceModifier();
     pm.UpdateTrack( track );
     pm.UpdateSmallImage();
-    pm.UpdateImage();
+    pm.ClearCoverUrlAndUpdateImage();
 }
 
 void PlaybackCallback::on_playback_stop( play_control::t_stop_reason reason )
@@ -103,7 +103,12 @@ void PlaybackCallback::on_playback_dynamic_info_track( const file_info& info )
     if (info.info_exists("cover_url"))
     {
         auto pm = DiscordHandler::GetInstance().GetPresenceModifier();
-        pm.UpdateImage( info.info_get( "cover_url" ) );
+        pm.UpdateImageForCoverUrl( info.info_get( "cover_url" ) );
+    }
+    else
+    {
+        auto pm = DiscordHandler::GetInstance().GetPresenceModifier();
+        pm.ClearCoverUrlAndUpdateImage();
     }
 }
 

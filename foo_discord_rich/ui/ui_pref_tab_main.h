@@ -78,8 +78,8 @@ private:
                             disableWhenPaused,
                             swapSmallImages )
 
-#undef SPTF_DEFINE_OPTIONS
-#undef SPTF_DEFINE_OPTION
+#undef SPTF_DEFINE_UI_OPTIONS
+#undef SPTF_DEFINE_UI_OPTION
 
     std::array<std::unique_ptr<qwr::ui::IUiDdxOption>, 9> ddxOptions_;
 

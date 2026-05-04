@@ -47,6 +47,170 @@ private:
 // Must initialize static class variables outside of the class
 std::mutex upload_lock::lock_;
 
+static bool hasArtworkData(const artwork_info& art);
+static bool hasArtworkSource(const artwork_info& art);
+
+static bool commandContainsPlaceholder( const std::string& commandString, const std::string& placeholder )
+{
+    return commandString.find( placeholder ) != std::string::npos;
+}
+
+static bool validateBlurredUploadSupport( const UploadOptions& options, const std::string& commandString )
+{
+    if ( options.mode != ArtworkMode::Blurred )
+    {
+        return true;
+    }
+
+    if ( options.blurPercent == 0 )
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Blurred artwork is unavailable because Blur Strength is set to 0";
+        return false;
+    }
+
+    if ( commandString.empty() || commandString.find_first_not_of( " \t\n\r" ) == std::string::npos )
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Blurred artwork is unavailable because no upload command is configured";
+        return false;
+    }
+
+    const bool hasFilePathPlaceholder = commandContainsPlaceholder( commandString, "{filepath}" );
+    const bool hasBlurPercentPlaceholder = commandContainsPlaceholder( commandString, "{blur_percent}" );
+
+    if ( !hasFilePathPlaceholder || !hasBlurPercentPlaceholder )
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Blurred artwork is unavailable because the uploader command must contain both {filepath} and {blur_percent}";
+        return false;
+    }
+
+    return true;
+}
+
+static bool currentPlaybackMatchesAnyHash( const pfc::avltree_t<metadb_index_hash>& hashes )
+{
+    if ( hashes.get_count() == 0 )
+    {
+        return false;
+    }
+
+    metadb_handle_ptr currentTrack;
+    if ( !playback_control::get()->get_now_playing( currentTrack ) )
+    {
+        return false;
+    }
+
+    metadb_index_hash currentHash;
+    if ( !clientByGUID( guid::artwork_url_index )->hashHandle( currentTrack, currentHash ) )
+    {
+        return false;
+    }
+
+    return hashes.contains( currentHash );
+}
+
+static UploadOptions makeUploadOptions( ArtworkMode mode, bool regenerate )
+{
+    UploadOptions options;
+    options.mode = mode;
+    options.regenerate = regenerate;
+    options.allowCachedReuse = !regenerate;
+    options.allowUrlPlaceholderReuse = ( mode == ArtworkMode::Normal && !regenerate );
+    if ( mode == ArtworkMode::Blurred )
+    {
+        options.blurPercent = config::GetValidatedBlurPercent();
+    }
+
+    return options;
+}
+
+static pfc::string8 getCanonicalArtworkUrl( metadb_index_hash hash )
+{
+    if ( hash == metadb_index_hash() )
+    {
+        return {};
+    }
+
+    const auto rec = record_get( hash );
+    if ( rec.artwork_url.get_length() > 0 && isValidUrl( rec.artwork_url ) )
+    {
+        return rec.artwork_url;
+    }
+
+    return {};
+}
+
+static pfc::string8 getModeScopedCachedUrl( artwork_info& art,
+                                            abort_callback& abort,
+                                            metadb_index_hash hash,
+                                            const UploadOptions& options )
+{
+    if ( !options.allowCachedReuse )
+    {
+        return {};
+    }
+
+    if ( options.mode == ArtworkMode::Normal )
+    {
+        auto canonicalUrl = getCanonicalArtworkUrl( hash );
+        if ( canonicalUrl.get_length() > 0 )
+        {
+            return canonicalUrl;
+        }
+
+        if ( hasArtworkData( art ) )
+        {
+            pfc::string8 hashUrl;
+            check_artwork_hash( art, abort, hashUrl, ArtworkMode::Normal, 0 );
+            if ( hashUrl.get_length() > 0 && isValidUrl( hashUrl ) )
+            {
+                return hashUrl;
+            }
+        }
+    }
+    else if ( options.mode == ArtworkMode::Blurred && hasArtworkData( art ) )
+    {
+        pfc::string8 hashUrl;
+        check_artwork_hash( art, abort, hashUrl, ArtworkMode::Blurred, options.blurPercent );
+        if ( hashUrl.get_length() > 0 && isValidUrl( hashUrl ) )
+        {
+            return hashUrl;
+        }
+    }
+
+    return {};
+}
+
+static pfc::string8 getModeScopedPlaceholderUrl( artwork_info& art,
+                                                 abort_callback& abort,
+                                                 metadb_index_hash hash,
+                                                 const UploadOptions& options )
+{
+    if ( !options.allowUrlPlaceholderReuse )
+    {
+        return {};
+    }
+
+    if ( options.mode == ArtworkMode::Normal )
+    {
+        return getCanonicalArtworkUrl( hash );
+    }
+
+    if ( options.mode == ArtworkMode::Blurred && hasArtworkData( art ) )
+    {
+        pfc::string8 hashUrl;
+        check_artwork_hash( art, abort, hashUrl, ArtworkMode::Blurred, options.blurPercent );
+        if ( hashUrl.get_length() > 0 && isValidUrl( hashUrl ) )
+        {
+            return hashUrl;
+        }
+    }
+
+    return {};
+}
+
 static bool hasArtworkData(const artwork_info& art)
 {
     return art.data.is_valid();
@@ -165,6 +329,10 @@ void threaded_process_artwork_uploader::on_init(ctx_t p_wnd) {}
 void threaded_process_artwork_uploader::run(threaded_process_status &p_status, abort_callback &p_abort)
 {
     pfc::list_t<metadb_index_hash> lstChanged; // Linear list of hashes that actually changed
+    pfc::avltree_t<metadb_index_hash> succeededHashes;
+    size_t successCount = 0;
+    size_t skippedHiddenCount = 0;
+    size_t failedCount = 0;
     const auto total_count = hashes_.get_count();
     t_size currIdx = 0;
     
@@ -173,19 +341,45 @@ void threaded_process_artwork_uploader::run(threaded_process_status &p_status, a
         {
             p_status.set_progress_float( currIdx / (double)total_count );
             const auto kv = *iter;
-            
-            if (!regenerate_ && record_get( kv.m_key ).artwork_url.get_length() > 0)
+
+            const auto rec = record_get( kv.m_key );
+            if ( rec.artwork_mode == ArtworkMode::Hidden )
+            {
+                ++skippedHiddenCount;
+                p_abort.check();
+                currIdx++;
+                continue;
+            }
+
+            if ( !regenerate_
+                 && rec.artwork_mode == ArtworkMode::Normal
+                 && rec.artwork_url.get_length() > 0
+                 && isValidUrl( rec.artwork_url ) )
             {
                 p_abort.check();
                 currIdx++;
                 continue;
             }
 
+            const auto options = makeUploadOptions( rec.artwork_mode, regenerate_ );
             pfc::string8 artwork_url;
+            bool recordChanged = false;
 
-            if (extractAndUploadArtwork(kv.m_value, p_abort, artwork_url, kv.m_key, regenerate_))
+            if ( extractAndUploadArtwork( kv.m_value, p_abort, artwork_url, kv.m_key, options, &recordChanged ) )
             {
-                lstChanged += kv.m_key;
+                ++successCount;
+                if ( !succeededHashes.contains( kv.m_key ) )
+                {
+                    succeededHashes += kv.m_key;
+                }
+                if ( recordChanged )
+                {
+                    lstChanged += kv.m_key;
+                }
+            }
+            else
+            {
+                ++failedCount;
             }
             
             p_abort.check();
@@ -198,15 +392,28 @@ void threaded_process_artwork_uploader::run(threaded_process_status &p_status, a
     }
 
     p_status.set_progress_float(1);
-    FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": " << lstChanged.get_count() << " entries updated";
+    FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Processed artwork for " << successCount
+                             << " group(s), failed " << failedCount << " group(s)";
+    if ( skippedHiddenCount > 0 )
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Skipped " << skippedHiddenCount
+                                 << " hidden artwork group(s)";
+    }
 
 
-    if (lstChanged.get_count() > 0) {
-        // This gracefully tells everyone about what just changed, in one pass regardless of how many items got altered
-        fb2k::inMainThread([lstChanged]
+    if ( lstChanged.get_count() > 0 || successCount > 0 )
+    {
+        fb2k::inMainThread([lstChanged, succeededHashes]
         {
-            cached_index_api()->dispatch_refresh(guid::artwork_url_index, lstChanged);
-            DiscordHandler::GetInstance().GetPresenceModifier().UpdateImage();
+            if ( lstChanged.get_count() > 0 )
+            {
+                // This gracefully tells everyone about what just changed, in one pass regardless of how many items got altered
+                cached_index_api()->dispatch_refresh(guid::artwork_url_index, lstChanged);
+            }
+            if ( currentPlaybackMatchesAnyHash( succeededHashes ) )
+            {
+                DiscordHandler::GetInstance().GetPresenceModifier().UpdateImage();
+            }
         });
     }
 }
@@ -215,29 +422,26 @@ void threaded_process_artwork_uploader::on_done(ctx_t p_wnd,bool p_was_aborted)
 {
 }
 
-bool extractAndUploadArtwork(const metadb_handle_ptr track, abort_callback &abort, pfc::string8 &artwork_url, metadb_index_hash hash, const bool regenerate)
+bool extractAndUploadArtwork( const metadb_handle_ptr track,
+                              abort_callback &abort,
+                              pfc::string8 &artwork_url,
+                              metadb_index_hash hash,
+                              const UploadOptions& options,
+                              bool* recordChanged )
 {
-    if ( config::uploadArtworkCommand.GetValue().length() == 0 )
+    if ( recordChanged )
     {
-        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": No upload command given";
+        *recordChanged = false;
+    }
+
+    const std::string commandString = config::uploadArtworkCommand.GetValue();
+    if ( !validateBlurredUploadSupport( options, commandString ) )
+    {
         return false;
     }
 
-    bool wasLocked = upload_lock::is_locked();
     upload_lock lock;
     abort.check();
-
-    // If we were locked check if this tracks artwork was uploaded and use that if it is found.
-    // If the artwork url needs to be regenerated do not do this
-    if (wasLocked && !regenerate)
-    {
-        const auto rec = record_get( hash );
-        if (rec.artwork_url.get_length() > 0)
-        {
-            artwork_url = rec.artwork_url;
-            return true;
-        }
-    }
 
     auto artwork = extractArtwork( track, abort );
     abort.check();
@@ -246,20 +450,39 @@ bool extractAndUploadArtwork(const metadb_handle_ptr track, abort_callback &abor
 #ifdef _DEBUG
         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Artwork path after extract " << artwork.path;
 #endif
-        artwork_url = uploadArtwork( artwork, abort, hash );
+        artwork_url = uploadArtwork( artwork, abort, options, hash );
         if (artwork_url.get_length() > 0)
         {
-            drp::artwork_url_set( hash, artwork_url );
+            bool changed = false;
+            if ( options.mode == ArtworkMode::Normal )
+            {
+                changed = drp::artwork_url_set( hash, artwork_url );
+            }
+            else if ( options.mode == ArtworkMode::Blurred )
+            {
+                changed = drp::blurred_artwork_url_set( hash, artwork_url, options.blurPercent, artwork.artwork_hash );
+            }
+
+            if ( recordChanged )
+            {
+                *recordChanged = changed;
+            }
             return true;
         }
     }
-    else if (usesUrlPlaceholder(config::uploadArtworkCommand.GetValue()))
+    else if ( options.mode == ArtworkMode::Normal
+              && options.allowUrlPlaceholderReuse
+              && usesUrlPlaceholder( config::uploadArtworkCommand.GetValue() ) )
     {
         // Artwork extraction failed but command uses {url} placeholder, so proceed with uploadArtwork
-        artwork_url = uploadArtwork( artwork, abort, hash );
+        artwork_url = uploadArtwork( artwork, abort, options, hash );
         if (artwork_url.get_length() > 0)
         {
-            drp::artwork_url_set( hash, artwork_url );
+            const bool changed = drp::artwork_url_set( hash, artwork_url );
+            if ( recordChanged )
+            {
+                *recordChanged = changed;
+            }
             return true;
         }
     }
@@ -512,7 +735,10 @@ std::wstring to_wstring(const std::string &str)
     When placeholder string {filepath} is found, it'll substitute it and pass it as a positional argument, skipping stdin.
     TODO: Add current URL with {cachedurl}, this would allow a script to verify it's still up and skip it OR pass it back (do we want that?)
 */
-std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandString, const std::string &filepath = "", const std::string &url = "")
+std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandString,
+                                                   const std::string &filepath = "",
+                                                   const std::string &url = "",
+                                                   const std::string &blurPercent = "")
 {
     auto quoteIfNeeded = []( const std::string& value ) -> std::string {
         if ( value.empty() || value.find( ' ' ) == std::string::npos || value[0] == '"' )
@@ -547,6 +773,7 @@ std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandStr
 
     substitutePlaceholder( processedCommand, "{filepath}", filepath, true );
     substitutePlaceholder( processedCommand, "{url}", url, false );
+    substitutePlaceholder( processedCommand, "{blur_percent}", blurPercent, false );
 
     std::wstring cmd_w = to_wstring(processedCommand);
     std::wstring executable;
@@ -579,7 +806,7 @@ std::pair<std::wstring, std::wstring> parseCommand(const std::string &commandStr
 */
 bool usesFilePathPlaceholder(const std::string &commandString)
 {
-    return commandString.find("{filepath}") != std::string::npos;
+    return commandContainsPlaceholder( commandString, "{filepath}" );
 }
 
 /*
@@ -758,51 +985,49 @@ bool uploadOpenProcess(const std::wstring &executable, const std::wstring &cmd_w
 
 bool usesUrlPlaceholder(const std::string &commandString)
 {
-    return commandString.find("{url}") != std::string::npos;
+    return commandContainsPlaceholder( commandString, "{url}" );
 }
 
-pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_index_hash hash)
+bool usesBlurPercentPlaceholder(const std::string &commandString)
+{
+    return commandContainsPlaceholder( commandString, "{blur_percent}" );
+}
+
+pfc::string8 uploadArtwork( artwork_info& art,
+                            abort_callback &abort,
+                            const UploadOptions& options,
+                            metadb_index_hash hash )
 {
     pfc::string8 artwork_url = "";
-    pfc::string8 cached_url = "";
     const std::string commandString = config::uploadArtworkCommand.GetValue();
     const bool hasFilePathPlaceholder = usesFilePathPlaceholder(commandString);
     const bool hasUrlPlaceholder = usesUrlPlaceholder(commandString);
+    const bool hasBlurPercentPlaceholder = usesBlurPercentPlaceholder(commandString);
 
-    //  Hit both URL stores in priority order
-    //  URL check: metadb (uploader but can also be set by user manually), does it exist, and do we think it's valid?
-    if (hash != metadb_index_hash())
+    if ( !validateBlurredUploadSupport( options, commandString ) )
     {
-        auto rec = record_get(hash);
-        if (rec.artwork_url.get_length() > 0 && isValidUrl(rec.artwork_url))
-        {
-            cached_url = rec.artwork_url;
-        }
-    }
-    // URL check: hash list (only the uploader writes to it), lower priority
-    if (cached_url.get_length() == 0 && hasArtworkData(art))
-    {
-        pfc::string8 hash_url;
-        check_artwork_hash(art, abort, hash_url);
-        if (hash_url.get_length() > 0 && isValidUrl(hash_url))
-        {
-            cached_url = hash_url;
-        }
+        return artwork_url;
     }
 
-    // If we have a cached URL but command doesn't use {url} placeholder, return the cached URL
-    if ( cached_url.get_length() > 0 )
+    const auto cachedUrl = getModeScopedCachedUrl( art, abort, hash, options );
+    const auto placeholderUrl = hasUrlPlaceholder ? getModeScopedPlaceholderUrl( art, abort, hash, options ) : pfc::string8{};
+
+    if ( cachedUrl.get_length() > 0 )
     {
-        if ( commandString.length() == 0 || !hasUrlPlaceholder )
+        if ( commandString.length() == 0 || !hasUrlPlaceholder || !options.allowUrlPlaceholderReuse )
         {
             #ifdef _DEBUG
-            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Using cached URL directly (no {url} placeholder): " << cached_url.c_str();
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                     << ": Using cached URL directly without invoking the uploader: "
+                                     << cachedUrl.c_str();
             #endif
-            return cached_url;
+            return cachedUrl;
         }
-        // If command uses {url} placeholder, continue execution w/ cached URL
+
         #ifdef _DEBUG
-        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Found cached URL, will call external tool with {url} placeholder: " << cached_url.c_str();
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Found cached URL, will call external tool with mode-scoped {url}: "
+                                 << placeholderUrl.c_str();
         #endif
     }
 
@@ -834,7 +1059,7 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
     }
     else if (!hasArtworkSource(art))
     {
-        if (cached_url.get_length() == 0)
+        if (placeholderUrl.get_length() == 0)
         {
             FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cannot execute {url} upload command without a cached artwork URL";
             return artwork_url;
@@ -877,7 +1102,7 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Upload command " << commandString;
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cover file path " << filepath;
          if (hasUrlPlaceholder) {
-             FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cached URL being passed: " << cached_url.c_str();
+             FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cached URL being passed: " << placeholderUrl.c_str();
          }
          #endif
 
@@ -885,7 +1110,8 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
          // Pass filepath and/or URL if placeholders are used
          const auto parsedCmd = parseCommand(commandString,
              hasFilePathPlaceholder ? filepath.c_str() : "",
-             hasUrlPlaceholder ? cached_url.c_str() : "");
+             hasUrlPlaceholder ? placeholderUrl.c_str() : "",
+             std::to_string( options.mode == ArtworkMode::Blurred ? options.blurPercent : 0 ) );
          const auto& executable = parsedCmd.first;
          const auto& fullCmdLine = parsedCmd.second;
 
@@ -901,22 +1127,23 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
          // If not using *any* placeholder, use stdin for backwards compatibility, assume user has older upload script
          uploadOpenProcess(executable, fullCmdLine, filepath_c, artwork_url,
              siStartInfo, piProcInfo,
-             g_hChildStd_OUT_Wr, g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, !(hasFilePathPlaceholder || hasUrlPlaceholder));
+             g_hChildStd_OUT_Wr, g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd,
+             !(hasFilePathPlaceholder || hasUrlPlaceholder || hasBlurPercentPlaceholder));
 
          #ifdef _DEBUG
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": External command returned: '" << (artwork_url.get_length() > 0 ? artwork_url.c_str() : "(empty)") << "'";
          #endif
 
          // If using {url} placeholder and external command returned empty, return cached URL directly
-         if (hasUrlPlaceholder && artwork_url.get_length() == 0) {
+         if (hasUrlPlaceholder && options.allowUrlPlaceholderReuse && artwork_url.get_length() == 0) {
              #ifdef _DEBUG
-             FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": External command returned empty, falling back to cached URL: " << cached_url.c_str();
+             FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": External command returned empty, falling back to cached URL: " << placeholderUrl.c_str();
              #endif
              if ( deleteFile )
              {
                  filesystem::g_remove(tempFile, abort);
              }
-             return cached_url;
+             return placeholderUrl;
          }
      } catch (...)
      {
@@ -943,7 +1170,11 @@ pfc::string8 uploadArtwork(artwork_info& art, abort_callback &abort, metadb_inde
         ensureArtworkHash(art);
         if (art.artwork_hash.get_length() > 0)
         {
-            set_artwork_url_hash(artwork_url, art.artwork_hash, abort);
+            set_artwork_url_hash( artwork_url,
+                                  art.artwork_hash,
+                                  abort,
+                                  options.mode,
+                                  options.mode == ArtworkMode::Blurred ? options.blurPercent : 0 );
         }
         #ifdef _DEBUG
         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Using external command result: " << artwork_url.c_str();

@@ -1,5 +1,6 @@
 #include <stdafx.h>
 #include <mutex>
+#include <string_view>
 
 #include <nlohmann/json.hpp>
 
@@ -10,6 +11,37 @@
 
 namespace drp::uploader
 {
+
+namespace
+{
+
+std::string MakeArtworkCacheKey( std::string_view artworkHash, ArtworkMode mode, uint32_t blurPercent )
+{
+    if ( mode == ArtworkMode::Blurred )
+    {
+        return "blur:" + std::to_string( blurPercent ) + ":" + std::string{ artworkHash };
+    }
+
+    return std::string{ artworkHash };
+}
+
+bool IsBlurredCacheKeyForArtworkHash( std::string_view cacheKey, std::string_view artworkHash )
+{
+    if ( cacheKey.rfind( "blur:", 0 ) != 0 )
+    {
+        return false;
+    }
+
+    if ( cacheKey.size() <= artworkHash.size() + 1 )
+    {
+        return false;
+    }
+
+    return cacheKey.substr( cacheKey.size() - artworkHash.size() ) == artworkHash
+           && cacheKey[cacheKey.size() - artworkHash.size() - 1] == ':';
+}
+
+} // namespace
 
 /**
  * Copy pasted from uploader_lock. Maybe there's a better way
@@ -138,7 +170,11 @@ bool prepare_static_hash_json( abort_callback& abort )
 }
 
 
-bool check_artwork_hash(artwork_info &artwork, abort_callback &abort, pfc::string8 &artwork_url)
+bool check_artwork_hash( artwork_info& artwork,
+                         abort_callback &abort,
+                         pfc::string8& artwork_url,
+                         ArtworkMode mode,
+                         uint32_t blurPercent )
 {
     if (!artwork.data.is_valid())
     {
@@ -158,12 +194,14 @@ bool check_artwork_hash(artwork_info &artwork, abort_callback &abort, pfc::strin
     }
 
     json_lock lock;
-    if (g_hashJson->contains(md5.c_str()))
+    const auto cacheKey = MakeArtworkCacheKey( md5.c_str(), mode, blurPercent );
+    if (g_hashJson->contains(cacheKey))
     {
         artwork_url = pfc::string8(
-            g_hashJson->at(md5.toString()).get<std::string>().c_str()
+            g_hashJson->at(cacheKey).get<std::string>().c_str()
         );
-        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Found url " << artwork_url << " with image hash " << md5;
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Found url " << artwork_url
+                                 << " with artwork cache key " << cacheKey.c_str();
 
         return true;
     }
@@ -212,7 +250,11 @@ bool save_hash_json(abort_callback &abort)
 }
 
 
-bool set_artwork_url_hash(const pfc::string8 &artwork_url, const pfc::string8 &artwork_hash, abort_callback &abort)
+bool set_artwork_url_hash( const pfc::string8& artwork_url,
+                           const pfc::string8& artwork_hash,
+                           abort_callback &abort,
+                           ArtworkMode mode,
+                           uint32_t blurPercent )
 {
     if ( !prepare_static_hash_json( abort) )
     {
@@ -221,17 +263,24 @@ bool set_artwork_url_hash(const pfc::string8 &artwork_url, const pfc::string8 &a
 
     {
         json_lock lock;
-        (*g_hashJson)[artwork_hash.c_str()] = artwork_url.c_str();
+        const auto cacheKey = MakeArtworkCacheKey( artwork_hash.c_str(), mode, blurPercent );
+        (*g_hashJson)[cacheKey] = artwork_url.c_str();
     }
 
     return save_hash_json(abort);
 }
 
 
-bool delete_artwork_urls_from_json(const pfc::avltree_t<pfc::string8> &urls, abort_callback &abort, int& deleted)
+bool delete_artwork_cache_entries( const pfc::avltree_t<pfc::string8>& urls,
+                                   const pfc::avltree_t<pfc::string8>& artworkHashes,
+                                   abort_callback &abort,
+                                   int& deleted )
 {
     deleted = 0;
-    if (urls.get_count() == 0) return true;
+    if ( urls.get_count() == 0 && artworkHashes.get_count() == 0 )
+    {
+        return true;
+    }
 
     if ( !prepare_static_hash_json( abort) )
     {
@@ -244,7 +293,23 @@ bool delete_artwork_urls_from_json(const pfc::avltree_t<pfc::string8> &urls, abo
         for (auto it = g_hashJson->begin(); it != g_hashJson->end();)
         {
             pfc::string8 val(it.value().get<std::string>().c_str());
-            if (urls.contains(val))
+            bool shouldDelete = urls.contains( val );
+
+            if ( !shouldDelete && artworkHashes.get_count() > 0 )
+            {
+                const auto keyView = std::string_view{ it.key() };
+                for ( auto hashIt = artworkHashes.first(); hashIt.is_valid(); ++hashIt )
+                {
+                    const auto hashView = std::string_view{ ( *hashIt ).c_str() };
+                    if ( keyView == hashView || IsBlurredCacheKeyForArtworkHash( keyView, hashView ) )
+                    {
+                        shouldDelete = true;
+                        break;
+                    }
+                }
+            }
+
+            if (shouldDelete)
             {
                 it = g_hashJson->erase(it);
                 ++deleted;

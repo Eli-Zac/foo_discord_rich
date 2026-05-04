@@ -3,6 +3,8 @@
 
 #include <ui/ui_pref_tab_main.h>
 #include <ui/ui_pref_tab_advanced.h>
+#include <ui/ui_pref_tab_artwork.h>
+#include <ui/ui_pref_tab_uploader.h>
 #include <discord/discord_impl.h>
 #include <fb2k/config.h>
 
@@ -54,7 +56,11 @@ using namespace config;
 PreferenceTabManager::PreferenceTabManager( preferences_page_callback::ptr callback )
     : callback_( callback )
 {
+    config::EnsureUploaderPreferencesMigrated();
+
     tabs_.emplace_back( std::make_unique<PreferenceTabMain>( this ) );
+    tabs_.emplace_back( std::make_unique<PreferenceTabArtwork>( this ) );
+    tabs_.emplace_back( std::make_unique<PreferenceTabUploader>( this ) );
     tabs_.emplace_back( std::make_unique<PreferenceTabAdvanced>( this ) );
 }
 

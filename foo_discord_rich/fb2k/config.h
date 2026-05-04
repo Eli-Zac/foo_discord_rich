@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include <qwr/fb2k_config.h>
 
 namespace drp::config
@@ -23,6 +26,16 @@ enum class StatusSetting : uint8_t
     Middle,     // to match order with discord's "name, state, details"
     Top
 };
+enum class UploaderMode : uint8_t
+{
+    Bundled = 0,
+    CustomCommand
+};
+enum class BundledUploaderService : uint8_t
+{
+    Imgur = 0,
+    Catbox
+};
 
 extern qwr::fb2k::ConfigBool isEnabled;
 extern qwr::fb2k::ConfigUint8Enum<ImageSetting> largeImageSettings;
@@ -40,11 +53,28 @@ extern qwr::fb2k::ConfigString playingImageId_Dark;
 extern qwr::fb2k::ConfigString pausedImageId_Dark;
 extern qwr::fb2k::ConfigString pausedImageId_Light;
 extern qwr::fb2k::ConfigString uploadArtworkCommand;
+extern qwr::fb2k::ConfigUint8Enum<UploaderMode> uploaderMode;
+extern qwr::fb2k::ConfigUint8Enum<BundledUploaderService> bundledUploaderService;
+extern qwr::fb2k::ConfigString bundledUploaderApiKey;
+extern qwr::fb2k::ConfigBool uploaderPreferencesMigrated;
 extern qwr::fb2k::ConfigString artworkMetadbKey;
+extern qwr::fb2k::ConfigUint32 blurPercent;
+extern qwr::fb2k::ConfigString hiddenPlaceholderUrl;
 extern qwr::fb2k::ConfigUint32 processTimeout;
+extern qwr::fb2k::ConfigBool overrideArtworkUrl;
+extern qwr::fb2k::ConfigString artworkOverrideUrl;
 
 extern qwr::fb2k::ConfigBool disableWhenPaused;
 extern qwr::fb2k::ConfigBool swapSmallImages;
 extern qwr::fb2k::ConfigBool uploadArtwork;
+
+std::string TrimWhitespace( std::string_view raw );
+void EnsureUploaderPreferencesMigrated();
+UploaderMode GetValidatedUploaderMode();
+BundledUploaderService GetValidatedBundledUploaderService();
+std::string GetBundledUploaderServiceCliName();
+uint32_t GetValidatedBlurPercent();
+std::string GetValidatedHiddenPlaceholderUrl();
+std::string GetValidatedArtworkOverrideUrl();
 
 }; // namespace drp::config

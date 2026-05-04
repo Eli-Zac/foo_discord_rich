@@ -48,10 +48,13 @@ bool PresenceData::operator==( const PresenceData& other )
              && areStringsSame( presence.largeImageText, other.presence.largeImageText )
              && areStringsSame( presence.smallImageKey, other.presence.smallImageKey )
              && areStringsSame( presence.smallImageText, other.presence.smallImageText )
+             && metadb == other.metadb
+             && remoteCoverUrl == other.remoteCoverUrl
              && presence.activityType == other.presence.activityType
              && presence.statusDisplayType == other.presence.statusDisplayType
              && presence.startTimestamp == other.presence.startTimestamp
              && presence.endTimestamp == other.presence.endTimestamp
+             && imageRevision == other.imageRevision
              && trackLength == other.trackLength );
 }
 
@@ -67,6 +70,8 @@ void PresenceData::CopyData( const PresenceData& other )
     details = other.details;
     largeImageKey = other.largeImageKey;
     smallImageKey = other.smallImageKey;
+    remoteCoverUrl = other.remoteCoverUrl;
+    imageRevision = other.imageRevision;
     trackLength = other.trackLength;
 
     memcpy( &presence, &other.presence, sizeof( presence ) );
@@ -128,90 +133,181 @@ struct sharedData_t
     // Normal pointers should be fine for this as it's a static instance
     DiscordHandler* handler;
 };
-    
-void PresenceModifier::UpdateImage(const pfc::string8& url)
+
+namespace
+{
+
+void setStaticLargeImage( std::shared_ptr<internal::PresenceData> pd )
+{
+    switch ( config::largeImageSettings )
+    {
+    case config::ImageSetting::Light:
+        setImageKey( config::largeImageId_Light, pd );
+        break;
+    case config::ImageSetting::Dark:
+        setImageKey( config::largeImageId_Dark, pd );
+        break;
+    case config::ImageSetting::Disabled:
+        setImageKey( qwr::u8string{}, pd );
+        break;
+    }
+}
+
+void setHiddenFallbackImage( std::shared_ptr<internal::PresenceData> pd )
+{
+    const auto placeholderUrl = config::GetValidatedHiddenPlaceholderUrl();
+    if ( !placeholderUrl.empty() )
+    {
+        setImageKey( qwr::u8string{ placeholderUrl }, pd );
+        return;
+    }
+
+    setStaticLargeImage( pd );
+}
+
+uploader::UploadOptions makeRuntimeUploadOptions( ArtworkMode mode )
+{
+    uploader::UploadOptions options;
+    options.mode = mode;
+    options.allowCachedReuse = true;
+    options.allowUrlPlaceholderReuse = ( mode == ArtworkMode::Normal );
+    if ( mode == ArtworkMode::Blurred )
+    {
+        options.blurPercent = config::GetValidatedBlurPercent();
+        options.allowUrlPlaceholderReuse = false;
+    }
+
+    return options;
+}
+
+} // namespace
+
+void PresenceModifier::UpdateImage()
 {
     auto pc = playback_control::get();
+    auto pd = presenceData_;
+    pd->imageRevision = parent_.NextImageRevision();
     
     if (config::largeImageSettings == config::ImageSetting::Disabled)
     {
-        setImageKey( qwr::u8string{}, presenceData_ );
+        setImageKey( qwr::u8string{}, pd );
         return;
     }
 
-    // If cover url given use that. This is the case with some internet radios.
-    if (!url.isEmpty())
+    const auto artworkOverrideUrl = config::GetValidatedArtworkOverrideUrl();
+    if ( !artworkOverrideUrl.empty() )
     {
-        setImageKey( url.toString(), presenceData_ );
+        setImageKey( qwr::u8string{ artworkOverrideUrl }, pd );
         return;
     }
-    
+
+    if ( !config::uploadArtwork )
+    {
+        setStaticLargeImage( pd );
+        return;
+    }
+
     metadb_handle_ptr p_out;
-    bool gSuccess = false;
-    bool hasCachedUrl = false;
+    const bool gSuccess = pc->get_now_playing( p_out );
     metadb_index_hash hash;
+    record_t rec;
+    auto artworkMode = ArtworkMode::Normal;
 
-    // Check if we want to use artwork and it already exists
-    if (config::uploadArtwork)
+    if ( gSuccess )
     {
-        gSuccess = pc->get_now_playing(p_out);
+        clientByGUID( guid::artwork_url_index )->hashHandle( p_out, hash );
+        rec = record_get( hash );
+        artworkMode = rec.artwork_mode;
+    }
 
-        if (gSuccess)
+    if ( artworkMode == ArtworkMode::Hidden )
+    {
+        setHiddenFallbackImage( pd );
+        return;
+    }
+
+    if ( artworkMode == ArtworkMode::Normal )
+    {
+        if ( uploader::isValidUrl( pd->remoteCoverUrl ) )
         {
-            clientByGUID( guid::artwork_url_index )->hashHandle( p_out, hash );
-            auto rec = record_get( hash );
+            setImageKey( pd->remoteCoverUrl.toString(), pd );
+            return;
+        }
 
-            if ( rec.artwork_url.get_length() > 0 )
+        const bool hasCanonicalUrl = uploader::isValidUrl( rec.artwork_url );
+        if ( hasCanonicalUrl )
+        {
+            setImageKey( rec.artwork_url.toString(), pd );
+            if ( !uploader::usesUrlPlaceholder( config::uploadArtworkCommand.GetValue() ) )
             {
-                setImageKey( qwr::u8string( rec.artwork_url ), presenceData_ );
-                hasCachedUrl = true;
-                if ( !uploader::usesUrlPlaceholder(config::uploadArtworkCommand.GetValue()) )
-                {
-                    return; //  normal behaviour, not using {url} so we don't care about passing it *every time*
-                }
+                return;
             }
         }
-    }
+        else
+        {
+            setStaticLargeImage( pd );
+        }
 
-    if (!hasCachedUrl)
-    {
-        switch ( config::largeImageSettings )
+        if ( !gSuccess )
         {
-        case config::ImageSetting::Light:
-        {
-            setImageKey( config::largeImageId_Light, presenceData_ );
-            break;
-        }
-        case config::ImageSetting::Dark:
-        {
-            setImageKey( config::largeImageId_Dark, presenceData_ );
-            break;
-        }
+            return;
         }
     }
-
-    if (config::uploadArtwork && gSuccess)
+    else
     {
-        auto shared = std::make_shared<sharedData_t>();
-        shared->pm = presenceData_;
-        shared->handler = &parent_;
+        setHiddenFallbackImage( pd );
+        if ( !gSuccess )
+        {
+            return;
+        }
+    }
 
-        fb2k::splitTask( [p_out, hash, shared]{
-            // In worker thread!
-            try {
-                pfc::string8 artwork_url;
-                if( uploader::extractAndUploadArtwork(p_out, fb2k::noAbort, artwork_url, hash) )
+    const auto options = makeRuntimeUploadOptions( artworkMode );
+    if ( artworkMode == ArtworkMode::Blurred && options.blurPercent == 0 )
+    {
+        return;
+    }
+
+    auto shared = std::make_shared<sharedData_t>();
+    shared->pm = pd;
+    shared->handler = &parent_;
+
+    fb2k::splitTask( [p_out, hash, shared, options]{
+        // In worker thread!
+        try {
+            pfc::string8 artwork_url;
+            bool recordChanged = false;
+            if ( uploader::extractAndUploadArtwork( p_out, fb2k::noAbort, artwork_url, hash, options, &recordChanged ) )
+            {
+                if ( recordChanged )
                 {
-                    const auto imageKey = qwr::u8string( artwork_url );
-                        setImageKey(imageKey, shared->pm);
-                        shared->handler->MaybeUpdatePresence(shared->pm);
+                    fb2k::inMainThread( [hash] {
+                        pfc::list_t<metadb_index_hash> changed;
+                        changed += hash;
+                        cached_index_api()->dispatch_refresh( guid::artwork_url_index, changed );
+                    } );
                 }
-            } catch(std::exception const & e) {
-                // should not really get here
-                FB2K_console_formatter() << DRP_NAME_WITH_VERSION << "Critical error: " << e;
+
+                setImageKey( artwork_url.toString(), shared->pm );
+                shared->handler->MaybeUpdatePresence( shared->pm );
             }
-        } );
-    }
+        } catch(std::exception const & e) {
+            // should not really get here
+            FB2K_console_formatter() << DRP_NAME_WITH_VERSION << "Critical error: " << e;
+        }
+    } );
+}
+
+void PresenceModifier::UpdateImageForCoverUrl( const pfc::string8& url )
+{
+    presenceData_->remoteCoverUrl = url;
+    UpdateImage();
+}
+
+void PresenceModifier::ClearCoverUrlAndUpdateImage()
+{
+    presenceData_->remoteCoverUrl = "";
+    UpdateImage();
 }
 
 void PresenceModifier::UpdateSmallImage()
@@ -389,6 +485,11 @@ DiscordHandler& DiscordHandler::GetInstance()
 {
     static DiscordHandler discordHandler;
     return discordHandler;
+}
+
+uint64_t DiscordHandler::NextImageRevision()
+{
+    return nextImageRevision_++;
 }
 
 void DiscordHandler::Initialize()

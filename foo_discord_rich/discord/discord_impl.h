@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include <cstdint>
+#include <memory>
 #include <discord_rpc.h>
 
 namespace drp::internal
@@ -24,6 +27,8 @@ public:
     qwr::u8string details;
     qwr::u8string largeImageKey;
     qwr::u8string smallImageKey;
+    pfc::string8 remoteCoverUrl;
+    uint64_t imageRevision = 0;
     double trackLength = 0;
 };
 
@@ -42,7 +47,9 @@ class PresenceModifier
 public:
     ~PresenceModifier();
 
-    void UpdateImage(const pfc::string8& url="");
+    void UpdateImage();
+    void UpdateImageForCoverUrl( const pfc::string8& url );
+    void ClearCoverUrlAndUpdateImage();
     void UpdateSmallImage();
     void UpdateTrack( metadb_handle_ptr metadb = metadb_handle_ptr() );
     void UpdateDuration( double time );
@@ -77,6 +84,7 @@ public:
     void MaybeUpdatePresence(std::shared_ptr<internal::PresenceData> pd);
 
     drp::PresenceModifier GetPresenceModifier();
+    uint64_t NextImageRevision();
 
 private:
     bool HasPresence() const;
@@ -94,6 +102,7 @@ private:
     bool hasPresence_ = true;
     qwr::u8string appToken_;
     std::shared_ptr<internal::PresenceData> presenceData_ = std::make_shared<internal::PresenceData>();
+    std::atomic<uint64_t> nextImageRevision_{ 1 };
 };
 
 } // namespace drp

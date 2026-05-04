@@ -82,7 +82,7 @@ void InputDialog::startTask() {
 			mainThreadOp(std::make_shared<abort_callback_impl>(), [shared] { shared->owner->EndDialog(IDOK); });
 		} catch(std::exception const & e) {
 			// should not really get here
-            FB2K_console_formatter() << "Failed to set album url from manual input. " << e;
+            FB2K_console_formatter() << "Failed to set artwork URL from manual input. " << e;
 			mainThreadOp(std::make_shared<abort_callback_impl>(), [shared] { shared->owner->EndDialog(-1); });
 		}
 	} );
@@ -111,7 +111,7 @@ void InputDialog::work( std::shared_ptr<sharedData_t> shared, std::shared_ptr<ab
 
 		pfc::list_t<metadb_index_hash> lstChanged; // Linear list of hashes that actually changed
 		auto url = shared->url;
-		url.skip_trailing_chars(" \t");
+		url.skip_trailing_chars(" \t\n\r");
 
 		for (auto iter = allHashes.first(); iter.is_valid(); ++iter)
 		{
@@ -127,11 +127,7 @@ void InputDialog::work( std::shared_ptr<sharedData_t> shared, std::shared_ptr<ab
 		if (lstChanged.get_count() > 0) {
 			// This gracefully tells everyone about what just changed, in one pass regardless of how many items got altered
 			cached_index_api()->dispatch_refresh(guid::artwork_url_index, lstChanged);
-
-			if (url.get_length() > 0)
-			{
-				DiscordHandler::GetInstance().GetPresenceModifier().UpdateImage();
-			}
+			DiscordHandler::GetInstance().GetPresenceModifier().UpdateImage();
 		}
 	} );
 }
