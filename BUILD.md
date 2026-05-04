@@ -4,6 +4,7 @@
 - Visual Studio 2022 (MSVC C++ v142 and v143 toolchain with respective ATL; Windows 10 SDK)
 - CMake 3.5+
 - Python with semver package
+- Go for bundled artwork uploader binaries
 
 ## Building
 
@@ -17,13 +18,23 @@
    python scripts/setup.py
    ```
 
-2. Build
+2. Artwork uploader binaries:
+
+   ```bash
+   python3 scripts/stage_bundled_uploader.py --uploader-dir ../drp_artwork_uploader
+   ```
+
+   The staging script builds both Windows binaries into `foo_discord_rich/resources`:
+   - `drp_artwork_uploader_windows_386.exe`
+   - `drp_artwork_uploader_windows_amd64.exe`
+
+3. Build
    ```bash
    MSBuild.exe workspaces/foo_discord_rich.sln -p:Configuration=Release -p:Platform=Win32
    MSBuild.exe workspaces/foo_discord_rich.sln -p:Configuration=Release -p:Platform=x64
    ```
-   
-3. Package:
+
+4. Package:
    ```bash
    python scripts/pack_component.py
    ```

@@ -203,6 +203,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="foo_discord_rich.rc2" />
+    <None Include="resources\drp_artwork_uploader_windows_386.exe" />
+    <None Include="resources\drp_artwork_uploader_windows_amd64.exe" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="foo_discord_rich.rc" />

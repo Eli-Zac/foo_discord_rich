@@ -169,6 +169,14 @@ BEGIN
     EDITTEXT        IDC_TEXTBOX_PROCESS_TIMEOUT,140,180,50,13,ES_AUTOHSCROLL
 END
 
+/////////////////////////////////////////////////////////////////////////////
+//
+// RCDATA
+//
+
+IDR_BUNDLED_ARTWORK_UPLOADER_X86 RCDATA "resources/drp_artwork_uploader_windows_386.exe"
+IDR_BUNDLED_ARTWORK_UPLOADER_X64 RCDATA "resources/drp_artwork_uploader_windows_amd64.exe"
+
 IDD_CTX_MENU_INPUT DIALOGEX 0, 0, 341, 73
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Selected 0 tracks"

@@ -3,8 +3,11 @@
 #include "uploader.h"
 
 #include <fb2k/config.h>
+#include <resource.h>
 
+#include <span>
 #include <ctime>
+#include <vector>
 #include <fb2k/artwork_metadb.h>
 
 #include "discord_impl.h"
@@ -55,7 +58,12 @@ static bool commandContainsPlaceholder( const std::string& commandString, const 
     return commandString.find( placeholder ) != std::string::npos;
 }
 
-static bool validateBlurredUploadSupport( const UploadOptions& options, const std::string& commandString )
+static bool isCustomCommandMode()
+{
+    return config::GetValidatedUploaderMode() == config::UploaderMode::CustomCommand;
+}
+
+static bool validateBlurredUploadEnabled( const UploadOptions& options )
 {
     if ( options.mode != ArtworkMode::Blurred )
     {
@@ -67,6 +75,21 @@ static bool validateBlurredUploadSupport( const UploadOptions& options, const st
         FB2K_console_formatter() << DRP_NAME_WITH_VERSION
                                  << ": Blurred artwork is unavailable because Blur Strength is set to 0";
         return false;
+    }
+
+    return true;
+}
+
+static bool validateCustomCommandBlurredUploadSupport( const UploadOptions& options, const std::string& commandString )
+{
+    if ( !validateBlurredUploadEnabled( options ) )
+    {
+        return false;
+    }
+
+    if ( options.mode != ArtworkMode::Blurred )
+    {
+        return true;
     }
 
     if ( commandString.empty() || commandString.find_first_not_of( " \t\n\r" ) == std::string::npos )
@@ -84,6 +107,21 @@ static bool validateBlurredUploadSupport( const UploadOptions& options, const st
         FB2K_console_formatter() << DRP_NAME_WITH_VERSION
                                  << ": Blurred artwork is unavailable because the uploader command must contain both {filepath} and {blur_percent}";
         return false;
+    }
+
+    return true;
+}
+
+static bool validateConfiguredUploadSupport( const UploadOptions& options )
+{
+    if ( !validateBlurredUploadEnabled( options ) )
+    {
+        return false;
+    }
+
+    if ( isCustomCommandMode() )
+    {
+        return validateCustomCommandBlurredUploadSupport( options, config::uploadArtworkCommand.GetValue() );
     }
 
     return true;
@@ -434,8 +472,7 @@ bool extractAndUploadArtwork( const metadb_handle_ptr track,
         *recordChanged = false;
     }
 
-    const std::string commandString = config::uploadArtworkCommand.GetValue();
-    if ( !validateBlurredUploadSupport( options, commandString ) )
+    if ( !validateConfiguredUploadSupport( options ) )
     {
         return false;
     }
@@ -470,7 +507,8 @@ bool extractAndUploadArtwork( const metadb_handle_ptr track,
             return true;
         }
     }
-    else if ( options.mode == ArtworkMode::Normal
+    else if ( isCustomCommandMode()
+              && options.mode == ArtworkMode::Normal
               && options.allowUrlPlaceholderReuse
               && usesUrlPlaceholder( config::uploadArtworkCommand.GetValue() ) )
     {
@@ -590,7 +628,9 @@ void closePipes(HANDLE pipe1, HANDLE pipe2, HANDLE pipe3, HANDLE pipe4)
     if (pipe4 != NULL) CloseHandle(pipe4);
 }
 
-bool readFromPipe(HANDLE g_hChildStd_OUT_Rd, pfc::string8 &artwork_url)
+bool readFromPipe(HANDLE g_hChildStd_OUT_Rd,
+                  pfc::string8 &artwork_url,
+                  std::chrono::seconds timeout)
 {
     bool inputFound = false;
     const int TEMP_BUF_SIZE = 16;
@@ -598,11 +638,7 @@ bool readFromPipe(HANDLE g_hChildStd_OUT_Rd, pfc::string8 &artwork_url)
     DWORD peekedBytes;
     const auto now = std::chrono::high_resolution_clock::now();
 
-    // Read timeout from conf. If set to 0 use 1 day as timeout.
-    const long timeout_config = config::processTimeout.GetValue();
-    const auto timeout_s = std::chrono::seconds(timeout_config == 0 ? 86400 : timeout_config);
-
-    // Try to read output from the process. for 10 seconds
+    // Try to read output from the process until the configured timeout expires.
     while (!inputFound)
     {
         if (PeekNamedPipe( g_hChildStd_OUT_Rd, tempBuf, TEMP_BUF_SIZE, &peekedBytes, NULL, NULL ))
@@ -616,7 +652,7 @@ bool readFromPipe(HANDLE g_hChildStd_OUT_Rd, pfc::string8 &artwork_url)
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         const auto td = std::chrono::high_resolution_clock::now() - now;
-        if (td > timeout_s) break;
+        if (td > timeout) break;
     }
 
     bool rSuccess = false;
@@ -688,6 +724,338 @@ bool getArtworkFilepath(const artwork_info& art,
     }
 
     return false;
+}
+
+struct BundledUploaderBinary
+{
+    int resourceId;
+    const char* archName;
+    const char* filename;
+};
+
+static constexpr BundledUploaderBinary bundledUploaderX86{
+    IDR_BUNDLED_ARTWORK_UPLOADER_X86,
+    "x86",
+    "drp_artwork_uploader_windows_386.exe",
+};
+
+static constexpr BundledUploaderBinary bundledUploaderX64{
+    IDR_BUNDLED_ARTWORK_UPLOADER_X64,
+    "x64",
+    "drp_artwork_uploader_windows_amd64.exe",
+};
+
+static bool tryDetectNativeMachineWithIsWow64Process2( USHORT& nativeMachine )
+{
+    nativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+
+    using IsWow64Process2Proc = BOOL( WINAPI* )( HANDLE, USHORT*, USHORT* );
+
+    const HMODULE kernel32 = GetModuleHandleW( L"kernel32.dll" );
+    if ( !kernel32 )
+    {
+        return false;
+    }
+
+    const auto isWow64Process2 = reinterpret_cast<IsWow64Process2Proc>( GetProcAddress( kernel32, "IsWow64Process2" ) );
+    if ( !isWow64Process2 )
+    {
+        return false;
+    }
+
+    USHORT processMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+    USHORT detectedNativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+    if ( !isWow64Process2( GetCurrentProcess(), &processMachine, &detectedNativeMachine ) )
+    {
+        return false;
+    }
+
+    if ( detectedNativeMachine == IMAGE_FILE_MACHINE_UNKNOWN )
+    {
+        return false;
+    }
+
+    nativeMachine = detectedNativeMachine;
+    return true;
+}
+
+static USHORT getNativeMachineFromSystemInfo()
+{
+    SYSTEM_INFO systemInfo{};
+    GetNativeSystemInfo( &systemInfo );
+
+    switch ( systemInfo.wProcessorArchitecture )
+    {
+    case PROCESSOR_ARCHITECTURE_INTEL:
+        return IMAGE_FILE_MACHINE_I386;
+    case PROCESSOR_ARCHITECTURE_AMD64:
+        return IMAGE_FILE_MACHINE_AMD64;
+#ifdef PROCESSOR_ARCHITECTURE_ARM64
+    case PROCESSOR_ARCHITECTURE_ARM64:
+#ifdef IMAGE_FILE_MACHINE_ARM64
+        return IMAGE_FILE_MACHINE_ARM64;
+#else
+        return 0xaa64;
+#endif
+#endif
+    default:
+        return IMAGE_FILE_MACHINE_UNKNOWN;
+    }
+}
+
+static USHORT detectNativeMachine()
+{
+    USHORT nativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+    if ( tryDetectNativeMachineWithIsWow64Process2( nativeMachine ) )
+    {
+        return nativeMachine;
+    }
+
+    return getNativeMachineFromSystemInfo();
+}
+
+static std::string getNativeMachineDisplay( const USHORT machine )
+{
+    switch ( machine )
+    {
+    case IMAGE_FILE_MACHINE_I386:
+        return "x86";
+    case IMAGE_FILE_MACHINE_AMD64:
+        return "x64";
+#ifdef IMAGE_FILE_MACHINE_ARM64
+    case IMAGE_FILE_MACHINE_ARM64:
+        return "ARM64";
+#endif
+    case IMAGE_FILE_MACHINE_UNKNOWN:
+        return "unknown";
+    default:
+        return fmt::format( "unknown PE machine 0x{:04x}", machine );
+    }
+}
+
+static void logUnsupportedBundledUploaderArchitectureOnce( const USHORT nativeMachine )
+{
+    static std::mutex logMutex;
+    static bool logged = false;
+
+    std::lock_guard lock( logMutex );
+    if ( logged )
+    {
+        return;
+    }
+
+    if ( nativeMachine == IMAGE_FILE_MACHINE_UNKNOWN )
+    {
+        FB2K_console_formatter()
+            << DRP_NAME_WITH_VERSION
+            << ": Bundled artwork uploader supports only x86/x64 native architectures; native architecture could not be detected. Custom command uploader mode remains available.";
+    }
+    else
+    {
+        const auto nativeMachineDisplay = getNativeMachineDisplay( nativeMachine );
+        FB2K_console_formatter()
+            << DRP_NAME_WITH_VERSION
+            << ": Bundled artwork uploader supports only x86/x64 native architectures; detected native architecture is "
+            << nativeMachineDisplay.c_str()
+            << ". Custom command uploader mode remains available.";
+    }
+
+    logged = true;
+}
+
+static const BundledUploaderBinary* selectBundledUploaderBinary()
+{
+    const USHORT nativeMachine = detectNativeMachine();
+    switch ( nativeMachine )
+    {
+    case IMAGE_FILE_MACHINE_I386:
+        return &bundledUploaderX86;
+    case IMAGE_FILE_MACHINE_AMD64:
+        return &bundledUploaderX64;
+    default:
+        logUnsupportedBundledUploaderArchitectureOnce( nativeMachine );
+        return nullptr;
+    }
+}
+
+static std::string getBundledUploaderResourceDescription( const BundledUploaderBinary& binary )
+{
+    return std::string( binary.archName ) + " resource ID " + std::to_string( binary.resourceId );
+}
+
+static std::span<const uint8_t> getBundledUploaderResourceBytes( const BundledUploaderBinary& binary )
+{
+    const HRSRC resource = FindResourceW( core_api::get_my_instance(),
+                                          MAKEINTRESOURCEW( binary.resourceId ),
+                                          RT_RCDATA );
+    const auto resourceDescription = getBundledUploaderResourceDescription( binary );
+    if ( !resource )
+    {
+        throw std::runtime_error( "Bundled uploader " + resourceDescription + " was not found" );
+    }
+
+    const DWORD resourceSize = SizeofResource( core_api::get_my_instance(), resource );
+    if ( resourceSize == 0 )
+    {
+        throw std::runtime_error( "Bundled uploader " + resourceDescription + " is empty" );
+    }
+
+    const HGLOBAL resourceData = LoadResource( core_api::get_my_instance(), resource );
+    if ( !resourceData )
+    {
+        throw std::runtime_error( "Bundled uploader " + resourceDescription + " could not be loaded" );
+    }
+
+    const auto* bytes = static_cast<const uint8_t*>( LockResource( resourceData ) );
+    if ( !bytes )
+    {
+        throw std::runtime_error( "Bundled uploader " + resourceDescription + " could not be locked" );
+    }
+
+    return { bytes, static_cast<size_t>( resourceSize ) };
+}
+
+static pfc::string8 getBundledUploaderDirectory()
+{
+    auto path = core_api::pathInProfile( DRP_UNDERSCORE_NAME );
+    path.add_filename( "bundled_uploader" );
+    return path;
+}
+
+static pfc::string8 getBundledUploaderExecutablePath( const BundledUploaderBinary& binary )
+{
+    auto path = getBundledUploaderDirectory();
+    path.add_filename( binary.filename );
+    return path;
+}
+
+static bool bundledUploaderFileMatchesResource( const pfc::string8& path,
+                                                std::span<const uint8_t> resourceBytes,
+                                                abort_callback& abort )
+{
+    if ( !filesystem::g_exists( path.c_str(), abort ) )
+    {
+        return false;
+    }
+
+    try
+    {
+        service_ptr_t<file> existingFile;
+        filesystem::g_open_read( existingFile, path.c_str(), abort );
+
+        const auto existingSize = existingFile->get_size_ex( abort );
+        if ( existingSize != static_cast<t_filesize>( resourceBytes.size() ) )
+        {
+            return false;
+        }
+
+        std::vector<uint8_t> existingBytes( resourceBytes.size() );
+        existingFile->read_object( existingBytes.data(), existingBytes.size(), abort );
+
+        return std::equal( resourceBytes.begin(), resourceBytes.end(), existingBytes.cbegin(), existingBytes.cend() );
+    }
+    catch ( const exception_aborted& )
+    {
+        throw;
+    }
+    catch ( ... )
+    {
+        return false;
+    }
+}
+
+static void extractBundledUploaderExecutable( const pfc::string8& path,
+                                              std::span<const uint8_t> resourceBytes,
+                                              abort_callback& abort )
+{
+    if ( filesystem::g_exists( path.c_str(), abort ) )
+    {
+        filesystem::g_remove( path.c_str(), abort );
+    }
+
+    service_ptr_t<file> outputFile;
+    filesystem::g_open_write_new( outputFile, path.c_str(), abort );
+    outputFile->write( resourceBytes.data(), resourceBytes.size(), abort );
+}
+
+static bool& getBundledUploaderVerifiedFlag( const BundledUploaderBinary& binary )
+{
+    static bool x86Verified = false;
+    static bool x64Verified = false;
+
+    return binary.resourceId == IDR_BUNDLED_ARTWORK_UPLOADER_X64 ? x64Verified : x86Verified;
+}
+
+static bool ensureBundledUploaderReady( abort_callback& abort,
+                                        pfc::string8& executablePath,
+                                        const BundledUploaderBinary*& selectedBinary )
+{
+    static std::mutex verificationMutex;
+
+    selectedBinary = selectBundledUploaderBinary();
+    if ( !selectedBinary )
+    {
+        executablePath = "";
+        return false;
+    }
+
+    const auto targetPath = getBundledUploaderExecutablePath( *selectedBinary );
+    pfc::string8 directPath;
+    executablePath = tryGetDirectArtworkFilepath( targetPath, directPath ) ? directPath : targetPath;
+
+    std::lock_guard lock( verificationMutex );
+    bool& verified = getBundledUploaderVerifiedFlag( *selectedBinary );
+    if ( verified )
+    {
+        return true;
+    }
+
+    try
+    {
+        const auto resourceBytes = getBundledUploaderResourceBytes( *selectedBinary );
+        const auto targetDir = getBundledUploaderDirectory();
+        if ( !filesystem::g_exists( targetDir.c_str(), abort ) )
+        {
+            filesystem::g_create_directory( targetDir.c_str(), abort );
+        }
+
+        if ( !bundledUploaderFileMatchesResource( targetPath, resourceBytes, abort ) )
+        {
+            extractBundledUploaderExecutable( targetPath, resourceBytes, abort );
+        }
+
+        verified = true;
+#ifdef _DEBUG
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Using bundled artwork uploader architecture "
+                                 << selectedBinary->archName;
+#endif
+        return true;
+    }
+    catch ( const exception_aborted& )
+    {
+        throw;
+    }
+    catch ( const std::exception& e )
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Failed to prepare bundled artwork uploader ("
+                                 << selectedBinary->archName
+                                 << ", resource ID " << selectedBinary->resourceId
+                                 << ", target '" << targetPath
+                                 << "'): " << e.what();
+        return false;
+    }
+    catch ( ... )
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Failed to prepare bundled artwork uploader ("
+                                 << selectedBinary->archName
+                                 << ", resource ID " << selectedBinary->resourceId
+                                 << ", target '" << targetPath
+                                 << "')";
+        return false;
+    }
 }
 
 std::wstring to_wstring(const std::string &str)
@@ -860,6 +1228,102 @@ std::string getWindowsErrorDescription(DWORD errorCode)
     return "Unknown error";
 }
 
+std::string getWindowsErrorName( DWORD errorCode )
+{
+    switch ( errorCode )
+    {
+    case ERROR_FILE_NOT_FOUND:
+        return "ERROR_FILE_NOT_FOUND";
+    case ERROR_PATH_NOT_FOUND:
+        return "ERROR_PATH_NOT_FOUND";
+    case ERROR_ACCESS_DENIED:
+        return "ERROR_ACCESS_DENIED";
+    case ERROR_BAD_EXE_FORMAT:
+        return "ERROR_BAD_EXE_FORMAT";
+    case ERROR_EXE_MACHINE_TYPE_MISMATCH:
+        return "ERROR_EXE_MACHINE_TYPE_MISMATCH";
+    case ERROR_WAIT_1:
+        return "ERROR_WAIT_1";
+    default:
+        return "ERROR_" + std::to_string( errorCode );
+    }
+}
+
+std::string wideToUtf8( const std::wstring& value )
+{
+    if ( value.empty() )
+    {
+        return {};
+    }
+
+    const int size = WideCharToMultiByte( CP_UTF8,
+                                          0,
+                                          value.c_str(),
+                                          -1,
+                                          nullptr,
+                                          0,
+                                          nullptr,
+                                          nullptr );
+    if ( size <= 0 )
+    {
+        return {};
+    }
+
+    std::string result( static_cast<size_t>( size - 1 ), '\0' );
+    WideCharToMultiByte( CP_UTF8,
+                         0,
+                         value.c_str(),
+                         -1,
+                         result.data(),
+                         size,
+                         nullptr,
+                         nullptr );
+    return result;
+}
+
+std::string getFileSizeDisplay( const std::wstring& path )
+{
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if ( !GetFileAttributesExW( path.c_str(), GetFileExInfoStandard, &data ) )
+    {
+        return "unavailable";
+    }
+
+    ULARGE_INTEGER size{};
+    size.HighPart = data.nFileSizeHigh;
+    size.LowPart = data.nFileSizeLow;
+    return std::to_string( size.QuadPart ) + " bytes";
+}
+
+std::string getBinaryTypeDisplay( const std::wstring& path )
+{
+    DWORD binaryType = 0;
+    if ( !GetBinaryTypeW( path.c_str(), &binaryType ) )
+    {
+        return "unavailable (" + getWindowsErrorName( GetLastError() ) + ")";
+    }
+
+    switch ( binaryType )
+    {
+    case SCS_32BIT_BINARY:
+        return "32-bit Windows";
+    case SCS_64BIT_BINARY:
+        return "64-bit Windows";
+    case SCS_DOS_BINARY:
+        return "DOS";
+    case SCS_OS216_BINARY:
+        return "16-bit OS/2";
+    case SCS_PIF_BINARY:
+        return "PIF";
+    case SCS_POSIX_BINARY:
+        return "POSIX";
+    case SCS_WOW_BINARY:
+        return "16-bit Windows";
+    default:
+        return "unknown (" + std::to_string( binaryType ) + ")";
+    }
+}
+
 /*
     Simple validation, does it look like a normal URL? Insert <falsehoods people believe about URLs> here
 */
@@ -877,7 +1341,8 @@ bool isValidUrl(const pfc::string8 &url)
 
 bool uploadOpenProcess(const std::wstring &executable, const std::wstring &cmd_w, const char* filepath_c, pfc::string8 &artwork_url,
     STARTUPINFO &siStartInfo, PROCESS_INFORMATION &piProcInfo,
-    HANDLE &g_hChildStd_OUT_Wr, HANDLE &g_hChildStd_IN_Rd, HANDLE &g_hChildStd_IN_Wr, HANDLE &g_hChildStd_OUT_Rd, bool useStdinForFilepath)
+    HANDLE &g_hChildStd_OUT_Wr, HANDLE &g_hChildStd_IN_Rd, HANDLE &g_hChildStd_IN_Wr, HANDLE &g_hChildStd_OUT_Rd,
+    bool useStdinForFilepath, std::chrono::seconds timeout, const char* uploaderLabel)
 {
      // Create the child process
      std::wstring mutableCmdLine = cmd_w; // https://devblogs.microsoft.com/oldnewthing/20090601-00/?p=18083
@@ -915,7 +1380,7 @@ bool uploadOpenProcess(const std::wstring &executable, const std::wstring &cmd_w
              CloseHandle( g_hChildStd_IN_Wr );
              g_hChildStd_IN_Wr = NULL;
 
-             bool rSuccess = readFromPipe(g_hChildStd_OUT_Rd, artwork_url);
+             bool rSuccess = readFromPipe(g_hChildStd_OUT_Rd, artwork_url, timeout);
 
              if ( wSuccess && rSuccess )
              {
@@ -937,7 +1402,7 @@ bool uploadOpenProcess(const std::wstring &executable, const std::wstring &cmd_w
          // In case of a time out terminate the process
          if (terminateProcess)
          {
-             TerminateProcess(&piProcInfo.hProcess, exit_code);
+             TerminateProcess(piProcInfo.hProcess, exit_code);
              WaitForSingleObject( piProcInfo.hProcess, 5000 );
          }
 
@@ -949,7 +1414,7 @@ bool uploadOpenProcess(const std::wstring &executable, const std::wstring &cmd_w
          const bool isError = exit_code != 0 || artwork_url.find_first('\n') != ~0 || !isValidUrl(artwork_url);
          artwork_url =  terminateProcess ? pfc::string8("Process timed out") : artwork_url;
 
-         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": artwork uploader exited with status: " << exit_code <<
+         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": " << uploaderLabel << " exited with status: " << exit_code <<
              " and " << ( isError ? "error" : "url" ) << ": " << artwork_url;
 
          if (isError)
@@ -963,21 +1428,35 @@ bool uploadOpenProcess(const std::wstring &executable, const std::wstring &cmd_w
     // What's the actual error? We care.
     DWORD lastError = GetLastError();
     std::string errorDesc = getWindowsErrorDescription(lastError);
+    std::string errorName = getWindowsErrorName( lastError );
 
-    // Let's get the executable string
-    std::string executableStr;
-    if (!executable.empty()) {
-        int size = WideCharToMultiByte(CP_UTF8, 0, executable.c_str(), -1, NULL, 0, NULL, NULL);
-        if (size > 0) {
-            executableStr.resize(size - 1); // -1 to exclude null terminator
-            WideCharToMultiByte(CP_UTF8, 0, executable.c_str(), -1, &executableStr[0], size, NULL, NULL);
-        }
+    closePipes( g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, g_hChildStd_OUT_Wr );
+    g_hChildStd_IN_Rd = NULL;
+    g_hChildStd_IN_Wr = NULL;
+    g_hChildStd_OUT_Rd = NULL;
+    g_hChildStd_OUT_Wr = NULL;
+
+    const std::string executableStr = wideToUtf8( executable );
+    if ( !executableStr.empty() )
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Failed to execute " << uploaderLabel
+                                 << " '" << executableStr.c_str()
+                                 << "' (Windows error: " << lastError
+                                 << " - " << errorName.c_str()
+                                 << " - " << errorDesc.c_str()
+                                 << "; binary: " << getBinaryTypeDisplay( executable ).c_str()
+                                 << "; file size: " << getFileSizeDisplay( executable ).c_str()
+                                 << ")";
     }
-
-    if (!executableStr.empty()) {
-        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Failed to execute '" << executableStr << "' (Windows error: " << lastError << " - " << errorDesc << ")";
-    } else {
-        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Failed to execute command (Windows error: " << lastError << " - " << errorDesc << ")";
+    else
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Failed to execute " << uploaderLabel
+                                 << " command (Windows error: " << lastError
+                                 << " - " << errorName.c_str()
+                                 << " - " << errorDesc.c_str()
+                                 << ")";
     }
 
     return false;
@@ -993,10 +1472,37 @@ bool usesBlurPercentPlaceholder(const std::string &commandString)
     return commandContainsPlaceholder( commandString, "{blur_percent}" );
 }
 
-pfc::string8 uploadArtwork( artwork_info& art,
-                            abort_callback &abort,
-                            const UploadOptions& options,
-                            metadb_index_hash hash )
+static void rememberUploadedArtworkHash( artwork_info& art,
+                                         abort_callback& abort,
+                                         const pfc::string8& artwork_url,
+                                         const UploadOptions& options )
+{
+    if ( artwork_url.get_length() == 0 )
+    {
+        return;
+    }
+
+    ensureArtworkHash( art );
+    if ( art.artwork_hash.get_length() > 0 )
+    {
+        set_artwork_url_hash( artwork_url,
+                              art.artwork_hash,
+                              abort,
+                              options.mode,
+                              options.mode == ArtworkMode::Blurred ? options.blurPercent : 0 );
+    }
+}
+
+static std::chrono::seconds getCustomCommandTimeout()
+{
+    const long timeoutConfig = config::processTimeout.GetValue();
+    return std::chrono::seconds( timeoutConfig == 0 ? 86400 : timeoutConfig );
+}
+
+static pfc::string8 uploadArtworkWithCustomCommand( artwork_info& art,
+                                                    abort_callback &abort,
+                                                    const UploadOptions& options,
+                                                    metadb_index_hash hash )
 {
     pfc::string8 artwork_url = "";
     const std::string commandString = config::uploadArtworkCommand.GetValue();
@@ -1004,7 +1510,7 @@ pfc::string8 uploadArtwork( artwork_info& art,
     const bool hasUrlPlaceholder = usesUrlPlaceholder(commandString);
     const bool hasBlurPercentPlaceholder = usesBlurPercentPlaceholder(commandString);
 
-    if ( !validateBlurredUploadSupport( options, commandString ) )
+    if ( !validateCustomCommandBlurredUploadSupport( options, commandString ) )
     {
         return artwork_url;
     }
@@ -1128,7 +1634,9 @@ pfc::string8 uploadArtwork( artwork_info& art,
          uploadOpenProcess(executable, fullCmdLine, filepath_c, artwork_url,
              siStartInfo, piProcInfo,
              g_hChildStd_OUT_Wr, g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd,
-             !(hasFilePathPlaceholder || hasUrlPlaceholder || hasBlurPercentPlaceholder));
+             !(hasFilePathPlaceholder || hasUrlPlaceholder || hasBlurPercentPlaceholder),
+             getCustomCommandTimeout(),
+             "artwork uploader");
 
          #ifdef _DEBUG
          FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": External command returned: '" << (artwork_url.get_length() > 0 ? artwork_url.c_str() : "(empty)") << "'";
@@ -1167,21 +1675,223 @@ pfc::string8 uploadArtwork( artwork_info& art,
 
     if (artwork_url.get_length() > 0)
     {
-        ensureArtworkHash(art);
-        if (art.artwork_hash.get_length() > 0)
-        {
-            set_artwork_url_hash( artwork_url,
-                                  art.artwork_hash,
-                                  abort,
-                                  options.mode,
-                                  options.mode == ArtworkMode::Blurred ? options.blurPercent : 0 );
-        }
+        rememberUploadedArtworkHash( art, abort, artwork_url, options );
         #ifdef _DEBUG
         FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Using external command result: " << artwork_url.c_str();
         #endif
     }
 
     return artwork_url;
+}
+
+static std::wstring quoteWindowsArgumentWide( std::wstring_view value )
+{
+    std::wstring quoted;
+    quoted.reserve( value.size() + 2 );
+    quoted.push_back( L'"' );
+
+    size_t backslashCount = 0;
+    for ( const wchar_t ch: value )
+    {
+        if ( ch == L'\\' )
+        {
+            ++backslashCount;
+            continue;
+        }
+
+        if ( ch == L'"' )
+        {
+            quoted.append( backslashCount * 2 + 1, L'\\' );
+            quoted.push_back( ch );
+            backslashCount = 0;
+            continue;
+        }
+
+        quoted.append( backslashCount, L'\\' );
+        backslashCount = 0;
+        quoted.push_back( ch );
+    }
+
+    quoted.append( backslashCount * 2, L'\\' );
+    quoted.push_back( L'"' );
+
+    return quoted;
+}
+
+static std::wstring buildBundledUploaderCommandLine( const pfc::string8& executablePath,
+                                                     const pfc::string8& artworkPath,
+                                                     const UploadOptions& options )
+{
+    std::wstring commandLine = quoteWindowsArgumentWide( qwr::unicode::ToWide( executablePath ) );
+
+    const auto serviceCliName = config::GetBundledUploaderServiceCliName();
+    commandLine += L" --service ";
+    commandLine += quoteWindowsArgumentWide( qwr::unicode::ToWide( qwr::u8string_view{ serviceCliName.data(), serviceCliName.size() } ) );
+
+    const auto apiKey = config::TrimWhitespace( config::bundledUploaderApiKey.GetValue() );
+    if ( !apiKey.empty() )
+    {
+        commandLine += L" --api-key ";
+        commandLine += quoteWindowsArgumentWide( qwr::unicode::ToWide( qwr::u8string_view{ apiKey.data(), apiKey.size() } ) );
+    }
+
+    if ( options.mode == ArtworkMode::Blurred )
+    {
+        const auto blurPercent = std::to_string( options.blurPercent );
+        commandLine += L" --blur-percent ";
+        commandLine += quoteWindowsArgumentWide( qwr::unicode::ToWide( qwr::u8string_view{ blurPercent.data(), blurPercent.size() } ) );
+    }
+
+    commandLine += L" ";
+    commandLine += quoteWindowsArgumentWide( qwr::unicode::ToWide( artworkPath ) );
+
+    return commandLine;
+}
+
+static std::chrono::seconds getBundledUploaderProcessTimeout()
+{
+    return std::chrono::seconds( 120 );
+}
+
+static pfc::string8 uploadArtworkWithBundledUploader( artwork_info& art,
+                                                      abort_callback& abort,
+                                                      const UploadOptions& options,
+                                                      metadb_index_hash hash )
+{
+    pfc::string8 artwork_url;
+
+    if ( !validateBlurredUploadEnabled( options ) )
+    {
+        return artwork_url;
+    }
+
+    const auto cachedUrl = getModeScopedCachedUrl( art, abort, hash, options );
+    if ( cachedUrl.get_length() > 0 )
+    {
+#ifdef _DEBUG
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Using cached URL directly without invoking the bundled uploader: "
+                                 << cachedUrl.c_str();
+#endif
+        return cachedUrl;
+    }
+
+    pfc::string8 tempFile;
+    bool deleteFile = false;
+    pfc::string8 filepath;
+    if ( !getArtworkFilepath( art, abort, filepath, tempFile, deleteFile ) )
+    {
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Could not resolve a usable artwork file for bundled upload";
+        return artwork_url;
+    }
+
+    auto cleanupTempFile = [&] {
+        if ( deleteFile )
+        {
+            filesystem::g_remove( tempFile, abort );
+        }
+    };
+
+    pfc::string8 executablePath;
+    const BundledUploaderBinary* selectedBinary = nullptr;
+    if ( !ensureBundledUploaderReady( abort, executablePath, selectedBinary ) )
+    {
+        cleanupTempFile();
+        return artwork_url;
+    }
+
+    HANDLE g_hChildStd_IN_Rd = NULL;
+    HANDLE g_hChildStd_IN_Wr = NULL;
+    HANDLE g_hChildStd_OUT_Rd = NULL;
+    HANDLE g_hChildStd_OUT_Wr = NULL;
+
+    SECURITY_ATTRIBUTES saAttr;
+
+    try
+    {
+        if ( !initializeProcessVariables( g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, g_hChildStd_OUT_Wr, saAttr ) )
+        {
+            closePipes( g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, g_hChildStd_OUT_Wr );
+            cleanupTempFile();
+            return artwork_url;
+        }
+
+        STARTUPINFO siStartInfo;
+        ZeroMemory( &siStartInfo, sizeof( STARTUPINFO ) );
+        siStartInfo.cb = sizeof( STARTUPINFO );
+        siStartInfo.hStdError = g_hChildStd_OUT_Wr;
+        siStartInfo.hStdOutput = g_hChildStd_OUT_Wr;
+        siStartInfo.hStdInput = g_hChildStd_IN_Rd;
+        siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+
+        PROCESS_INFORMATION piProcInfo;
+        ZeroMemory( &piProcInfo, sizeof( PROCESS_INFORMATION ) );
+
+        const auto fullCmdLine = buildBundledUploaderCommandLine( executablePath, filepath, options );
+        const auto executable = qwr::unicode::ToWide( executablePath );
+
+#ifdef _DEBUG
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION
+                                 << ": Running bundled artwork uploader with service "
+                                 << config::GetBundledUploaderServiceCliName().c_str()
+                                 << " using " << selectedBinary->archName;
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Cover file path " << filepath;
+#endif
+
+        abort.check();
+
+        pfc::string8 uploaderLabel = "bundled artwork uploader (";
+        uploaderLabel += selectedBinary->archName;
+        uploaderLabel += ")";
+
+        uploadOpenProcess( executable,
+                           fullCmdLine,
+                           "",
+                           artwork_url,
+                           siStartInfo,
+                           piProcInfo,
+                           g_hChildStd_OUT_Wr,
+                           g_hChildStd_IN_Rd,
+                           g_hChildStd_IN_Wr,
+                           g_hChildStd_OUT_Rd,
+                           false,
+                           getBundledUploaderProcessTimeout(),
+                           uploaderLabel.c_str() );
+    }
+    catch ( ... )
+    {
+        closePipes( g_hChildStd_IN_Rd, g_hChildStd_IN_Wr, g_hChildStd_OUT_Rd, g_hChildStd_OUT_Wr );
+        cleanupTempFile();
+
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": bundled artwork uploader threw an error";
+        throw;
+    }
+
+    cleanupTempFile();
+    abort.check();
+
+    if ( artwork_url.get_length() > 0 )
+    {
+        rememberUploadedArtworkHash( art, abort, artwork_url, options );
+#ifdef _DEBUG
+        FB2K_console_formatter() << DRP_NAME_WITH_VERSION << ": Using bundled uploader result: " << artwork_url.c_str();
+#endif
+    }
+
+    return artwork_url;
+}
+
+pfc::string8 uploadArtwork( artwork_info& art,
+                            abort_callback &abort,
+                            const UploadOptions& options,
+                            metadb_index_hash hash )
+{
+    if ( config::GetValidatedUploaderMode() == config::UploaderMode::Bundled )
+    {
+        return uploadArtworkWithBundledUploader( art, abort, options, hash );
+    }
+
+    return uploadArtworkWithCustomCommand( art, abort, options, hash );
 }
 
 }

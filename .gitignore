@@ -15,8 +15,11 @@
 *.userprefs
 
 # Build results
+/_result/
+/build/
 /_*
 *.fb2k-component
+foo_discord_rich/resources/drp_artwork_uploader_windows_*.exe
 [Dd]ebug/
 [Dd]ebugPublic/
 [Dd]ebug FB2K/
