@@ -31,6 +31,7 @@ public:
         COMMAND_HANDLER_EX( IDC_CHECK_IS_ENABLED, BN_CLICKED, OnEditChange )
         COMMAND_HANDLER_EX( IDC_TEXTBOX_STATE, EN_CHANGE, OnEditChange )
         COMMAND_HANDLER_EX( IDC_TEXTBOX_DETAILS, EN_CHANGE, OnEditChange )
+        COMMAND_HANDLER_EX( IDC_TEXTBOX_LARGE_IMAGE_TEXT, EN_CHANGE, OnEditChange )
         COMMAND_RANGE_CODE_HANDLER_EX( IDC_RADIO_IMG_LIGHT, IDC_RADIO_IMG_DISABLED, BN_CLICKED, OnEditChange )
         COMMAND_RANGE_CODE_HANDLER_EX( IDC_RADIO_PLAYBACK_IMG_LIGHT, IDC_RADIO_PLAYBACK_IMG_DISABLED, BN_CLICKED, OnEditChange )
         COMMAND_RANGE_CODE_HANDLER_EX( IDC_RADIO_TIME_PROGRESS_BAR, IDC_RADIO_TIME_DISABLED, BN_CLICKED, OnEditChange )
@@ -71,6 +72,7 @@ private:
     SPTF_DEFINE_UI_OPTIONS( isEnabled,
                             stateQuery,
                             detailsQuery,
+                            largeImageTextQuery,
                             largeImageSettings,
                             smallImageSettings,
                             timeSettings,
@@ -81,7 +83,7 @@ private:
 #undef SPTF_DEFINE_UI_OPTIONS
 #undef SPTF_DEFINE_UI_OPTION
 
-    std::array<std::unique_ptr<qwr::ui::IUiDdxOption>, 9> ddxOptions_;
+    std::array<std::unique_ptr<qwr::ui::IUiDdxOption>, 10> ddxOptions_;
 
     CHyperLink helpUrl_;
 };

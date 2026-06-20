@@ -31,6 +31,7 @@ qwr::fb2k::ConfigUint8Enum<StatusSetting> statusSettings( guid::conf_status_sett
 
 qwr::fb2k::ConfigString stateQuery( guid::conf_state_query, "[%title%]" );
 qwr::fb2k::ConfigString detailsQuery( guid::conf_details_query, "[%album artist%[: %album%]]" );
+qwr::fb2k::ConfigString largeImageTextQuery( guid::conf_large_image_text_query, "" );
 
 qwr::fb2k::ConfigString discordAppToken( guid::conf_app_token, "507982587416018945" );
 qwr::fb2k::ConfigString largeImageId_Light( guid::conf_large_image_id_light, "foobar2000" );

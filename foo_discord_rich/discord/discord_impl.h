@@ -25,6 +25,7 @@ public:
     metadb_handle_ptr metadb;
     qwr::u8string state;
     qwr::u8string details;
+    qwr::u8string largeImageText;
     qwr::u8string largeImageKey;
     qwr::u8string smallImageKey;
     pfc::string8 remoteCoverUrl;

@@ -19,6 +19,7 @@ PresenceData::PresenceData()
     presence.statusDisplayType = NAME;   // Default to showing app name
     presence.state = reinterpret_cast<const char*>( state.c_str() );
     presence.details = reinterpret_cast<const char*>( details.c_str() );
+    presence.largeImageText = reinterpret_cast<const char*>( largeImageText.c_str() );
 }
 
 PresenceData::PresenceData( const PresenceData& other )
@@ -68,6 +69,7 @@ void PresenceData::CopyData( const PresenceData& other )
     metadb = other.metadb;
     state = other.state;
     details = other.details;
+    largeImageText = other.largeImageText;
     largeImageKey = other.largeImageKey;
     smallImageKey = other.smallImageKey;
     remoteCoverUrl = other.remoteCoverUrl;
@@ -77,6 +79,7 @@ void PresenceData::CopyData( const PresenceData& other )
     memcpy( &presence, &other.presence, sizeof( presence ) );
     presence.state = reinterpret_cast<const char*>( state.c_str() );
     presence.details = reinterpret_cast<const char*>( details.c_str() );
+    presence.largeImageText = reinterpret_cast<const char*>( largeImageText.c_str() );
     presence.largeImageKey = ( largeImageKey.empty() ? nullptr : reinterpret_cast<const char*>( largeImageKey.c_str() ) );
     presence.smallImageKey = ( smallImageKey.empty() ? nullptr : reinterpret_cast<const char*>( smallImageKey.c_str() ) );
 }
@@ -387,6 +390,7 @@ void PresenceModifier::UpdateTrack( metadb_handle_ptr metadb )
 
     pd->state.clear();
     pd->details.clear();
+    pd->largeImageText.clear();
     pd->trackLength = 0;
 
     if ( metadb.is_valid() )
@@ -429,6 +433,8 @@ void PresenceModifier::UpdateTrack( metadb_handle_ptr metadb )
     fixStringLength( pd->state );
     pd->details = queryData( config::detailsQuery );
     fixStringLength( pd->details );
+    pd->largeImageText = queryData( config::largeImageTextQuery );
+    fixStringLength( pd->largeImageText );
 
     // update status display type
     switch ( config::statusSettings )
@@ -457,6 +463,7 @@ void PresenceModifier::UpdateTrack( metadb_handle_ptr metadb )
 
     pd->presence.state = pd->state.c_str();
     pd->presence.details = pd->details.c_str();
+    pd->presence.largeImageText = pd->largeImageText.c_str();
     UpdateDuration( durationStr.empty() ? 0 : stold( durationStr ) );
 }
 

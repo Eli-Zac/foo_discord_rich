@@ -23,8 +23,8 @@ enum class TimeSetting : uint8_t
 enum class StatusSetting : uint8_t
 {
     Name = 0,
-    Middle,     // to match order with discord's "name, state, details"
-    Top
+    Middle, // state / line 2; mildy confusing
+    Top     // details / line 1
 };
 enum class UploaderMode : uint8_t
 {
@@ -44,6 +44,7 @@ extern qwr::fb2k::ConfigUint8Enum<TimeSetting> timeSettings;
 extern qwr::fb2k::ConfigUint8Enum<StatusSetting> statusSettings;
 extern qwr::fb2k::ConfigString stateQuery;
 extern qwr::fb2k::ConfigString detailsQuery;
+extern qwr::fb2k::ConfigString largeImageTextQuery;
 
 extern qwr::fb2k::ConfigString discordAppToken;
 extern qwr::fb2k::ConfigString largeImageId_Light;
