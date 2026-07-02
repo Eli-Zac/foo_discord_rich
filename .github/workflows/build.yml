@@ -47,6 +47,13 @@ jobs:
             grep -n "out_of_range" "$f" || true
           fi
 
+      - name: Fix upstream missing includes (newer MSVC no longer pulls them in)
+        shell: bash
+        run: |
+          f=foo_discord_rich/stdafx.h
+          grep -q '#include <chrono>' "$f" || sed -i 's|#include <string>|#include <string>\n#include <chrono>\n#include <thread>|' "$f"
+          grep -nE "#include <(string|chrono|thread)>" "$f"
+
       - name: Stub bundled-uploader binaries (skip Go build; not used)
         shell: bash
         run: |
