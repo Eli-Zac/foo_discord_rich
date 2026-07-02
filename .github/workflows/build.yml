@@ -2,7 +2,8 @@ name: Build component
 
 # Plain build for wsnrq/foo_discord_rich. The album-art-API change lives in the
 # source (foo_discord_rich/discord/discord_impl.cpp) which you commit to the repo;
-# this workflow only builds and packs it.
+# this workflow builds and packs it (x64). The "Fix/Force" steps are just
+# compatibility shims so the older code builds on the current MSVC/CMake.
 #
 # Run: Actions tab -> "Build component" -> Run workflow. When it finishes,
 # open the run and download the "foo_discord_rich" artifact (the .fb2k-component).
@@ -38,6 +39,15 @@ jobs:
       - name: Prepare project (submodules + generated headers)
         run: py -u scripts/setup.py
 
+      - name: Force discord-rpc sub-build to the right architecture
+        shell: bash
+        run: |
+          f=submodules/discord-rpc/src/discord-rpc.vcxproj
+          if [ -f "$f" ]; then
+            sed -i 's|cmake .. -DCMAKE_BUILD_TYPE|cmake .. -A $(Platform) -DCMAKE_BUILD_TYPE|g' "$f"
+            grep -n "cmake .. -A" "$f" || true
+          fi
+
       - name: Fix upstream submodule bug (invalid 'throw std::out_of_range;')
         shell: bash
         run: |
@@ -63,9 +73,6 @@ jobs:
 
       - name: NuGet restore
         run: nuget restore workspaces/foo_discord_rich.sln
-
-      - name: Build Win32 (Release)
-        run: msbuild workspaces/foo_discord_rich.sln /p:Configuration=Release /p:Platform=Win32 /m /verbosity:minimal
 
       - name: Build x64 (Release)
         run: msbuild workspaces/foo_discord_rich.sln /p:Configuration=Release /p:Platform=x64 /m /verbosity:minimal
