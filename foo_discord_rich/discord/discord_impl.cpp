@@ -189,6 +189,74 @@ bool ShouldAutomaticallyUploadArtwork()
            && config::uploadArtwork;
 }
 
+// Evaluate a title-formatting query against the currently playing track.
+// Used so the "Override artwork URL" can contain fields like %album%.
+qwr::u8string FormatForNowPlaying( const qwr::u8string& query )
+{
+    auto pc = playback_control::get();
+    titleformat_object::ptr tf;
+    titleformat_compiler::get()->compile_safe( tf, query.c_str() );
+
+    pfc::string8_fast result;
+    if ( pc->is_playing() )
+    {
+        metadb_handle_ptr dummyHandle;
+        pc->playback_format_title_ex( dummyHandle, nullptr, result, tf, nullptr, playback_control::display_level_all );
+    }
+    else
+    {
+        metadb_handle_ptr nowPlaying;
+        if ( pc->get_now_playing( nowPlaying ) && nowPlaying.is_valid() )
+        {
+            nowPlaying->format_title( nullptr, result, tf, nullptr );
+        }
+    }
+
+    return result.c_str();
+}
+
+// Percent-encode characters that are unsafe in a URL (spaces, non-ASCII bytes
+// from album/artist names, etc.), while leaving URL-structural characters and
+// existing percent-escapes intact.
+qwr::u8string PercentEncodeArtworkUrl( const qwr::u8string& url )
+{
+    static const std::string_view kSafe = "-._~:/?#[]@!$&'()*+,;=%";
+    const char* kHex = "0123456789ABCDEF";
+
+    std::string out;
+    out.reserve( url.size() );
+    for ( const unsigned char c: url )
+    {
+        const bool isUnreserved =
+            ( c >= '0' && c <= '9' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' );
+        if ( isUnreserved || kSafe.find( static_cast<char>( c ) ) != std::string_view::npos )
+        {
+            out += static_cast<char>( c );
+        }
+        else
+        {
+            out += '%';
+            out += kHex[c >> 4];
+            out += kHex[c & 0x0F];
+        }
+    }
+
+    return out.c_str();
+}
+
+// Resolve the configured override URL for the current track: expand title
+// formatting, then URL-encode. Falls back to the raw template if expansion
+// yields nothing (e.g. nothing is playing).
+qwr::u8string ResolveArtworkOverrideUrl( const qwr::u8string& overrideTemplate )
+{
+    const auto evaluated = FormatForNowPlaying( overrideTemplate );
+    if ( evaluated.empty() )
+    {
+        return overrideTemplate;
+    }
+    return PercentEncodeArtworkUrl( evaluated );
+}
+
 } // namespace
 
 void PresenceModifier::UpdateImage()
@@ -206,7 +274,7 @@ void PresenceModifier::UpdateImage()
     const auto artworkOverrideUrl = config::GetValidatedArtworkOverrideUrl();
     if ( !artworkOverrideUrl.empty() )
     {
-        setImageKey( qwr::u8string{ artworkOverrideUrl }, pd );
+        setImageKey( ResolveArtworkOverrideUrl( qwr::u8string{ artworkOverrideUrl } ), pd );
         return;
     }
 
